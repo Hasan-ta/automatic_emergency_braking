@@ -7,16 +7,13 @@
 
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional
 import numpy as np
-import gymnasium as gym
-import math
 from scipy.sparse import csr_matrix
-import copy
-
+from scenario_factory import make_env
+from scenario_definitions import Family, Scenario
 
 import signal
-import sys
 
 terminate_signal = False
 def signal_handler(sig, frame):
@@ -56,6 +53,11 @@ class Discretizer:
     def num_states(self) -> int:
         d = self.state_dim()
         return d[0]*d[1]*d[2]
+    
+# class TransitionModel:
+#     def __init__(self, discretizer: Discretizer, n_actions: int):
+#         self.T = []
+#         for
 
 
 # =============== Maximum-Likelihood MDP model ===============
@@ -286,23 +288,24 @@ def train_mle_mdp(scenarios,
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
 
-    from fmvss_simulation import generate_fmvss127, make_env, Family, Scenario
     scenarios = []
     # sc = next(s for s in generate_fmvss127()
     #           if s.family == Family.V2V_DECELERATING and s.subject_speed_kmh == 80 and s.headway_m == 20)
     # scenarios.append(sc)
     # scenarios.append(Scenario(Family.V2V_STATIONARY, 50, 0, manual_brake=False, headway_m=40, note="S7.3 no manual"))
 
-    for v in list(range(10, 81, 10)):
-        scenarios.append(Scenario(Family.V2V_STATIONARY, v, 0, manual_brake=False, headway_m=6*0.277778*v, note="S7.3 no manual"))
-    for v in [40, 50, 60, 70, 80]:
-        scenarios.append(Scenario(Family.V2V_SLOWER_MOVING, v, 20, manual_brake=False, headway_m=6*(v-20)*277778, note="S7.4 no manual"))
-    for v in [50, 80]:
-        for hw in [12, 20, 30, 40]:
-            for decel_g in [0.3, 0.4, 0.5]:
-                for manual in [False]:
-                    scenarios.append(Scenario(Family.V2V_DECELERATING, v, v, lead_decel_ms2=decel_g*9.80665,
-                                   headway_m=hw, manual_brake=manual, note="S7.5"))
+    # for v in list(range(10, 81, 10)):
+    #     scenarios.append(Scenario(Family.V2V_STATIONARY, v, 0, manual_brake=False, headway_m=6*0.277778*v, note="S7.3 no manual"))
+    # for v in [40, 50, 60, 70, 80]:
+    #     scenarios.append(Scenario(Family.V2V_SLOWER_MOVING, v, 20, manual_brake=False, headway_m=6*(v-20)*277778, note="S7.4 no manual"))
+    # for v in [50, 80]:
+    #     for hw in [12, 20, 30, 40]:
+    #         for decel_g in [0.3, 0.4, 0.5]:
+    #             for manual in [False]:
+    #                 scenarios.append(Scenario(Family.V2V_DECELERATING, v, v, lead_decel_ms2=decel_g*9.80665,
+    #                                headway_m=hw, manual_brake=manual, note="S7.5"))
+
+    scenarios.append(Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=10, lead_speed_kmh=0, lead_decel_ms2=None, headway_m=16.66668, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'))
 
     # Discretization grids (tune to your dynamics):
     # Gap up to 60m, rel_speed -30..30 m/s, ego 0..40 m/s
@@ -342,16 +345,3 @@ if __name__ == "__main__":
         mean_ret, std_ret = evaluate_policy(env, disc, planner, episodes=10)
         print(f"Evaluation: mean return={mean_ret:.2f} ± {std_ret:.2f}")
         env.close()
-
-class PolicyExecutor:
-    def __init__(self, q_path):
-        self.Q = np.load(q_path)
-        self.disc = Discretizer(
-            gap_bins=np.linspace(0.0, 60.0, 31),      # 30 bins (2m)
-            rel_bins=np.linspace(-30.0, 30.0, 31),    # 30 bins (2 m/s)
-            ego_bins=np.linspace(0.0, 40.0, 21),      # 20 bins (2 m/s)
-        )
-
-    def __call__(self, obs):
-        s = self.disc.to_state(obs)
-        return int(np.argmax(self.Q[s]))
