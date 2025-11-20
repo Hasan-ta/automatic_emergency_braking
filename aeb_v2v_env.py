@@ -90,10 +90,13 @@ class AEBV2VEnv(gym.Env):
             
         def smooth_l1_gap_penalty(gap):
             multiplier = 200
-            if gap < 0.3:
+            if gap < 0.5:
                 return -100
-            if gap < 1.5:
-                return (gap+2)**2 * multiplier
+            else:
+                return 1000
+            
+            # if gap < 1.5:
+            #     return (gap+2)**2 * multiplier
             # if gap > 1.5:
             #     return gap**2 * multiplier
             return gap * multiplier
