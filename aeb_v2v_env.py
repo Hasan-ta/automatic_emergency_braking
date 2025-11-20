@@ -82,11 +82,11 @@ class AEBV2VEnv(gym.Env):
 
         def smooth_l1_ttc(ttc, a):
             assert a == 1 or a == 0
-            multiplier = 1 if a == 0 else 4
+            multiplier = 2 if a == 0 else 4
             if ttc > 1.5:
-                return multiplier*(ttc**2)
+                return multiplier*((ttc+1.5)**2)
             else:
-                return multiplier * ttc
+                return multiplier * (ttc+1.5)
             
         def smooth_l1_gap_penalty(gap):
             multiplier = 200
@@ -110,8 +110,8 @@ class AEBV2VEnv(gym.Env):
             else:
                 if a == 1 or a == 0:
                     r -= smooth_l1_ttc(ttc, a)
-        # if self._last_a is not None and a != self._last_a:
-        #     r -= 10.0
+        if self._last_a is not None and a != self._last_a:
+            r -= 40.0
 
         self._last_a = a
         # r = -1000.0 if collided else (1.0 - 0.05*abs(a_ego))
