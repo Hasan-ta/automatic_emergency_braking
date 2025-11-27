@@ -305,7 +305,8 @@ if __name__ == "__main__":
     #                 scenarios.append(Scenario(Family.V2V_DECELERATING, v, v, lead_decel_ms2=decel_g*9.80665,
     #                                headway_m=hw, manual_brake=manual, note="S7.5"))
 
-    scenarios.append(Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=10, lead_speed_kmh=0, lead_decel_ms2=None, headway_m=16.66668, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'))
+    # scenarios.append(Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=10, lead_speed_kmh=0, lead_decel_ms2=None, headway_m=16.66668, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'))
+    scenarios.append(Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=50, lead_speed_kmh=0, lead_decel_ms2=None, headway_m=84, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'))
 
     # Discretization grids (tune to your dynamics):
     # Gap up to 60m, rel_speed -30..30 m/s, ego 0..40 m/s

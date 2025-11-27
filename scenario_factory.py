@@ -42,8 +42,8 @@ def generate_fmvss127() -> Iterable[Scenario]:
             yield Scenario(Family.PED_ALONG_25R, v, pedestrian_speed_kmh=5, overlap=0.25, daylight=day)
 
 # ---------- Factory ----------
-def make_env(s: Scenario, dt: float = 0.05, render_mode: Optional[str] = None) -> gym.Env:
+def make_env(s: Scenario, dt: float = 0.05) -> gym.Env:
     if s.family in {Family.V2V_STATIONARY, Family.V2V_SLOWER_MOVING, Family.V2V_DECELERATING}:
-        return AEBV2VEnv(s, dt=dt, render_mode=render_mode)
+        return AEBV2VEnv(s, dt=dt)
     else:
-        return AEBPedEnv(s, dt=dt, render_mode=render_mode)
+        return AEBPedEnv(s, dt=dt)

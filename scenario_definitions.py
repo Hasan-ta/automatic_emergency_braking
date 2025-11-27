@@ -1,6 +1,7 @@
 import enum
 from dataclasses import dataclass
 from typing import Optional
+from enum import Enum
 
 # ---------- Scenario taxonomy ----------
 class Family(enum.Enum):
@@ -17,9 +18,9 @@ class Family(enum.Enum):
 class Scenario:
   family: Family
   subject_speed_kmh: float
-  lead_speed_kmh: float = 0.0
-  lead_decel_ms2: Optional[float] = None
-  headway_m: Optional[float] = None
+  lead_speed_kmh: float
+  lead_decel_ms2: float
+  headway_m: float
   pedestrian_speed_kmh: Optional[float] = None
   overlap: Optional[float] = None
   daylight: Optional[bool] = True
@@ -37,3 +38,9 @@ class Actor:
 class SimulationParams:
   car_length_m: float = 5 
   car_width_m: float = 2
+
+class Action(Enum):
+    Nothing = 0
+    Warning = 1
+    SoftBrake = 2
+    StrongBrake = 3
