@@ -3,7 +3,7 @@ from scenario_definitions import Action, EGO_ACTION_DECEL
 import numpy as np
 from scipy.sparse import csr_matrix
 
-def build_deterministic_model(
+def build_deterministic_transition_model(
   disc: Discretizer,
   scene_length: float,
   lead_decel_ms2: float,
@@ -116,3 +116,6 @@ def build_deterministic_model(
 
   return next_state, transition_matrices
 
+
+
+def build_deterministic_rewards_model()

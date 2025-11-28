@@ -3,79 +3,10 @@ from typing import Optional
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-from scenario_definitions import Scenario, Family, Actor, SimulationParams, Action
+from scenario_definitions import Scenario, Action, EGO_ACTION_DECEL, Vehicle, Rectangle, Vector2D, Scene
 from simulation_utils import kph, compute_gap, check_collision, compute_ttc
 from dataclasses import dataclass
 from typing import Optional, Tuple
-
-
-
-# ---------- Core data structures you specified ----------
-
-
-@dataclass
-class Vector2D:
-    x: float
-    y: float
-
-
-@dataclass
-class Scene:
-    """Scene defines the origin frame of all the other components."""
-
-    # The length of the drivable scene in meters
-    length: float
-
-    # The width of the drivable scene in meters
-    width: float
-
-    @classmethod
-    def from_scenario_definition(cls, scenario: Scenario) -> "Scene":
-        # NOTE: your snippet had `return Scenario(...)` which is likely a typo
-        return cls(length=scenario.headway_m + 40.0, width=5.0)
-
-
-@dataclass
-class Rectangle:
-    # The position of the rectangle center with respect to the scene frame.
-    # The rectangle is axis aligned to the scene frame.
-    center: Vector2D
-
-    # Rectangle width in meters (lateral, y)
-    width: float
-
-    # Rectangle height in meters (longitudinal, x)
-    height: float
-
-
-@dataclass
-class Vehicle:
-    # The vehicle box in the scene frame.
-    box: Rectangle
-
-    # The vehicle velocity in the scene frame.
-    velocity: Vector2D
-
-    # The acceleration of the vehicle in the scene frame.
-    acceleration: Vector2D
-
-    def update(self, dt: float) -> None:
-        vx0 = self.velocity.x
-        x0 = self.box.center.x
-        ax = self.acceleration.x
-
-        x_new = x0 + vx0 * dt + 0.5 * ax * dt * dt
-        vx_new = max(0.0, vx0 + ax * dt)
-
-        # Things end when vx is zero
-        if vx_new <= 1e-5:
-            self.acceleration.x = 0.0
-
-        self.box.center.x = x_new
-        self.velocity.x = vx_new
-
-        # y stays at 0
-        
 
 
 class EgoAgent:
@@ -84,12 +15,7 @@ class EgoAgent:
     def __init__(self, init_state: Vehicle):
         self.vehicle_state = init_state
         # Negative x-acceleration for braking (m/s^2)
-        self.action_to_decel = {
-            Action.SoftBrake: -6.0,
-            Action.StrongBrake: -9.0,
-            Action.Warning: 0.0,
-            Action.Nothing: 0.0,
-        }
+        self.action_to_decel = EGO_ACTION_DECEL
 
     @classmethod
     def from_scenario_definition(cls, scenario: Scenario) -> "EgoAgent":
@@ -285,26 +211,6 @@ class AEBV2VEnv(gym.Env):
         obs = np.array([x_ego, x_npc, v_ego, v_npc], dtype=np.float32)
         return obs
 
-
-    def _check_collision(self) -> bool:
-        """Rectangle overlap along x (same lane in y) -> collision."""
-        ego_box = self.ego.vehicle_state.box
-        npc_box = self.npc.vehicle_state.box
-
-        # 1D overlap in x (axis-aligned)
-        ego_min_x = ego_box.center.x - ego_box.height * 0.5
-        ego_max_x = ego_box.center.x + ego_box.height * 0.5
-        npc_min_x = npc_box.center.x - npc_box.height * 0.5
-        npc_max_x = npc_box.center.x + npc_box.height * 0.5
-
-        overlap_x = (ego_min_x <= npc_max_x) and (npc_min_x <= ego_max_x)
-
-        # Single-lane y alignment (both near y=0)
-        ego_y = ego_box.center.y
-        npc_y = npc_box.center.y
-        same_lane_y = abs(ego_y - npc_y) <= self.lane.width * 0.5
-
-        return overlap_x and same_lane_y
 
     def _sync_cache(self):
         """Update convenience attributes used by external visualizers."""

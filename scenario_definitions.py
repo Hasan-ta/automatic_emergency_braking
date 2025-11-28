@@ -40,7 +40,79 @@ class SimulationParams:
   car_width_m: float = 2
 
 class Action(Enum):
-    Nothing = 0
-    Warning = 1
-    SoftBrake = 2
-    StrongBrake = 3
+  Nothing = 0
+  Warning = 1
+  SoftBrake = 2
+  StrongBrake = 3
+
+
+EGO_ACTION_DECEL = {
+  Action.SoftBrake: -6.0,
+  Action.StrongBrake: -9.0,
+  Action.Warning: 0.0,
+  Action.Nothing: 0.0,
+}
+
+@dataclass
+class Vector2D:
+  x: float
+  y: float
+
+
+@dataclass
+class Scene:
+  """Scene defines the origin frame of all the other components."""
+
+  # The length of the drivable scene in meters
+  length: float
+
+  # The width of the drivable scene in meters
+  width: float
+
+  @classmethod
+  def from_scenario_definition(cls, scenario: Scenario) -> "Scene":
+    return cls(length=scenario.headway_m + 40.0, width=5.0)
+
+
+@dataclass
+class Rectangle:
+  # The position of the rectangle center with respect to the scene frame.
+  # The rectangle is axis aligned to the scene frame.
+  center: Vector2D
+
+  # Rectangle width in meters (lateral, y)
+  width: float
+
+  # Rectangle height in meters (longitudinal, x)
+  height: float
+
+
+@dataclass
+class Vehicle:
+  # The vehicle box in the scene frame.
+  box: Rectangle
+
+  # The vehicle velocity in the scene frame.
+  velocity: Vector2D
+
+  # The acceleration of the vehicle in the scene frame.
+  acceleration: Vector2D
+
+  def update(self, dt: float) -> None:
+    vx0 = self.velocity.x
+    x0 = self.box.center.x
+    ax = self.acceleration.x
+
+    x_new = x0 + vx0 * dt + 0.5 * ax * dt * dt
+    vx_new = max(0.0, vx0 + ax * dt)
+
+    # Things end when vx is zero
+    if vx_new <= 1e-5:
+        self.acceleration.x = 0.0
+
+    self.box.center.x = x_new
+    self.velocity.x = vx_new
+
+    # y stays at 0
+        
+
