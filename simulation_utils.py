@@ -29,18 +29,18 @@ def disk(img, xc, yc, r, color):
     mask = (x - xc)**2 + (y - yc)**2 <= r*r
     img[mask] = color
 
-# def compute_gap(actor1: Actor, actor2: Actor):
-#     gap = max(0.0, actor1.position_x - actor2.position_x - 0.5* actor1.length - 0.5* actor2.length)
-#     return gap
+def compute_gap(actor1: Actor, actor2: Actor):
+    gap = max(0.0, actor1.position_x - actor2.position_x - 0.5* actor1.length - 0.5* actor2.length)
+    return gap
 
-# def check_collision(actor1: Actor, actor2: Actor):
-#     return compute_gap(actor1, actor2) <= 0.0
+def check_collision(actor1: Actor, actor2: Actor):
+    return compute_gap(actor1, actor2) <= 0.0
 
-# def compute_ttc(actor1: Actor, actor2: Actor):
-#     gap = compute_gap(actor1, actor2)
-#     v_rel = actor1.velocity - actor2.velocity
-#     ttc = gap/(-v_rel) if v_rel < 0 else np.inf
-#     return ttc
+def compute_ttc(actor1: Actor, actor2: Actor):
+    gap = compute_gap(actor1, actor2)
+    v_rel = actor1.velocity - actor2.velocity
+    ttc = gap/(-v_rel) if v_rel < 0 else np.inf
+    return ttc
 
 def check_collision(ego_vehicle: Vehicle, npc_vehicle: Vehicle) -> bool:
     """Rectangle overlap along x (same lane in y) -> collision."""
@@ -58,8 +58,8 @@ def check_collision(ego_vehicle: Vehicle, npc_vehicle: Vehicle) -> bool:
     # 1D overlap in y (axis-aligned)
     ego_min_y = ego_box.center.y - ego_box.width * 0.5
     ego_max_y = ego_box.center.y + ego_box.width * 0.5
-    npc_min_y = npc_box.center.y - npc_box.length * 0.5
-    npc_max_y = npc_box.center.y + npc_box.length * 0.5
+    npc_min_y = npc_box.center.y - npc_box.height * 0.5
+    npc_max_y = npc_box.center.y + npc_box.height * 0.5
 
     overlap_y = (ego_min_y <= npc_max_y) and (npc_min_y <= ego_max_y)
 

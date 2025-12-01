@@ -1,52 +1,51 @@
-import argparse
-import numpy as np
-from fmvss_simulation import make_env, Family, Scenario
+from scenario_factory import make_env, generate_training_scenarios
+from discretizer import Discretizer
+from global_config import DiscretizerConfig, SimulationConfig
 from policy_executor import PolicyExecutor
+from deterministic_model import DeterministicModelConfig, RewardsModel
+from q_learning import DQNInference
+import numpy as np
 
-
-# Evaluate the learned policy without exploration
-def evaluate_policy(executor, episodes=10, seed=123):
-  scenarios = []
-  # for v in list(range(10, 81, 10)):
-  #       scenarios.append(Scenario(Family.V2V_STATIONARY, v, 0, manual_brake=False, headway_m=6*0.277778*v, note="S7.3 no manual"))
-  # for v in [40, 50, 60, 70, 80]:
-  #     scenarios.append(Scenario(Family.V2V_SLOWER_MOVING, v, 20, manual_brake=False, headway_m=6*(v-20)*277778, note="S7.4 no manual"))
-  # for v in [50, 80]:
-  #     for hw in [12, 20, 30, 40]:
-  #         for decel_g in [0.3, 0.4, 0.5]:
-  #             for manual in [False]:
-  #                 scenarios.append(Scenario(Family.V2V_DECELERATING, v, v, lead_decel_ms2=decel_g*9.80665,
-  #                                 headway_m=hw, manual_brake=manual, note="S7.5"))
-
-  scenarios.append(Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=10, lead_speed_kmh=0, lead_decel_ms2=None, headway_m=16.66668, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'))
-
-  for sc in scenarios:
-    print(f"scenario: {sc}:")
-    env = make_env(sc, dt=0.05)
+def evaluate_policy(env, disc: Discretizer, policy: PolicyExecutor, episodes=10, seed=123):
     ret = []
-
     for ep in range(episodes):
       obs, _ = env.reset(seed=seed+ep)
       done = False
       R = 0.0
       while not done:
-          a = executor(obs)
-          obs, r, done, trunc, _ = env.step(a)
-          R += r
-          if trunc:
-              break
+        a = policy(obs)
+        obs, r, done, trunc, _ = env.step(a)
+        R += r
+        if trunc:
+          break
       ret.append(R)
-
-    env.close()
-    mean_ret, std_ret = np.mean(ret), np.std(ret)
-    
-    print(f"Evaluation: mean return={mean_ret:.2f} ± {std_ret:.2f}")
+    return np.mean(ret), np.std(ret)
 
 if __name__ == "__main__":
-  parser = argparse.ArgumentParser(description="Evaluate policy on FMVSS policies.")
-  parser.add_argument("--policy", required=True, help="The policy file")
-  args = parser.parse_args()
 
-  executor = PolicyExecutor(args.policy)
+  scenarios = generate_training_scenarios()
 
-  evaluate_policy(executor)
+  disc_config = DiscretizerConfig()
+  disc = Discretizer.from_ranges(
+    gap_min=disc_config.gap_min,
+    gap_max=disc_config.gap_max,
+    v_min=disc_config.v_min,
+    v_max=disc_config.v_max,      # m/s
+    n_gap=disc_config.n_gap,
+    n_v_ego=disc_config.n_v_ego,
+    n_v_npc=disc_config.n_v_npc,
+  ) 
+  model_cfg = DeterministicModelConfig()
+  rewards_model = RewardsModel(model_cfg)
+
+  # executor = PolicyExecutor(disc, '/Users/htafish/projects/aa228/final_project/q_deterministic_planner.npy')
+
+  executor = DQNInference("aeb_dqn_qnet.pt")
+  
+  sim_config = SimulationConfig()
+  for sc in scenarios:
+    print(f"scenario: {sc}:")
+    env = make_env(sc, rewards_model, dt=sim_config.dt, max_time=sim_config.total_time)
+    mean_ret, std_ret = evaluate_policy(env, disc, executor, episodes=10)
+    print(f"Evaluation: mean return={mean_ret:.2f} ± {std_ret:.2f}")
+    env.close()

@@ -4,9 +4,11 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 from scenario_definitions import Scenario, Action, EGO_ACTION_DECEL, Vehicle, Rectangle, Vector2D, Scene
-from simulation_utils import kph, compute_gap, check_collision, compute_ttc
+from simulation_utils import kph
 from dataclasses import dataclass
 from typing import Optional, Tuple
+from simulation_utils import check_collision
+from deterministic_model import RewardsModel, State
 
 
 class EgoAgent:
@@ -49,7 +51,7 @@ class NPCVehicle:
         state = Vehicle(
             box=Rectangle(Vector2D(scenario.headway_m + 1.0, 0.0), width=2.0, height=5.0),
             velocity=Vector2D(kph(scenario.lead_speed_kmh), 0.0),
-            acceleration=Vector2D(scenario.lead_decel_ms2, 0.0),
+            acceleration=Vector2D(-scenario.lead_decel_ms2, 0.0),
         )
         return NPCVehicle(state)
 
@@ -82,9 +84,9 @@ class AEBV2VEnv(gym.Env):
         "render_modes": [],  # using Arcade externally for viz
     }
 
-    def __init__(self, scenario: Scenario, dt: float = 0.05, max_time: float = 6.0):
+    def __init__(self, scenario: Scenario, rewards_model: RewardsModel, dt: float = 0.05, max_time: float = 6.0):
         super().__init__()
-
+        self.rewards_model = rewards_model
         self.scenario = scenario
         self.dt = dt
         self.max_time = max_time
@@ -100,13 +102,10 @@ class AEBV2VEnv(gym.Env):
         # Gym spaces
         self.action_space = spaces.Discrete(len(Action))
 
-        # Observations: [x_ego, x_npc, v_ego, v_npc]
-        obs_low = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        obs_high = np.array(
-            [self.scene.length, self.scene.length, 60.0, 60.0], dtype=np.float32
-        )
-        self.observation_space = spaces.Box(low=obs_low, high=obs_high, dtype=np.float32)
-
+        # Observations: [x_npc_in_ego, v_ego, v_npc]
+        obs_low = np.array([0.0,    0.0,    0.0], dtype=np.float64)
+        obs_high = np.array([150.0, 60.0, 60.0], dtype=np.float64)
+        self.observation_space = spaces.Box(low=obs_low, high=obs_high, dtype=np.float64)
 
         # Internal time and done flag
         self.time: float = 0.0
@@ -151,6 +150,10 @@ class AEBV2VEnv(gym.Env):
 
         if self._terminated:
             raise RuntimeError("step() called on terminated environment. Call reset().")
+        
+        obs_prev = self._get_obs()
+        
+        # print(action_enum)
 
         # Integrate one step
         self.ego.update(action_enum, self.dt)
@@ -160,7 +163,7 @@ class AEBV2VEnv(gym.Env):
         self._sync_cache()
 
         # Compute collision and termination
-        collided = self._check_collision()
+        collided = check_collision(self.ego, self.npc)
         out_of_scene = (
             self.ego.vehicle_state.box.center.x > self.scene.length
             or self.npc.vehicle_state.box.center.x < 0.0
@@ -175,18 +178,9 @@ class AEBV2VEnv(gym.Env):
         #   - small step penalty (-dt)
         #   - big penalty on collision
         #   - light penalty for strong braking to encourage minimal intervention
-        step_reward = -self.dt
-
-        if collided:
-            step_reward -= 1000.0
-
-        # Penalize harsh braking a bit
-        if action_enum == Action.SoftBrake:
-            step_reward -= 0.1
-        elif action_enum == Action.StrongBrake:
-            step_reward -= 0.2
-
         obs = self._get_obs()
+        step_reward = self.rewards_model(State(obs_prev[0], obs_prev[1], obs_prev[2]), action, State(obs[0], obs[1], obs[2]))
+
         info = self._get_info(collided=collided)
 
         return obs, float(step_reward), bool(terminated), bool(truncated), info
@@ -195,21 +189,22 @@ class AEBV2VEnv(gym.Env):
 
     def _get_obs(self) -> np.ndarray:
         """
-        Observation: [x_ego, x_npc, v_ego, v_npc].
-        Positions are the centers of the vehicle rectangles along x.
-        Speeds are longitudinal velocities in m/s.
+        Observation: [gap, v_ego, v_npc, a_npc].
         """
         ego_box = self.ego.vehicle_state.box
         npc_box = self.npc.vehicle_state.box
 
-        x_ego = ego_box.center.x
-        x_npc = npc_box.center.x
+        # gap: front of ego to rear of lead
+        ego_front = ego_box.center.x 
+        lead_rear = npc_box.center.x
+        gap = lead_rear - ego_front
 
         v_ego = self.ego.vehicle_state.velocity.x
         v_npc = self.npc.vehicle_state.velocity.x
 
-        obs = np.array([x_ego, x_npc, v_ego, v_npc], dtype=np.float32)
+        obs = np.array([gap, v_ego, v_npc], dtype=np.float64)
         return obs
+
 
 
     def _sync_cache(self):
