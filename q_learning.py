@@ -10,6 +10,7 @@ from scenario_factory import make_env, generate_training_scenarios
 from scenario_definitions import Family, Scenario, Action
 from global_config import SimulationConfig
 from aeb_v2v_env import AEBV2VEnv
+from discretizer import Discretizer
 
 import random
 import gymnasium as gym
@@ -262,5 +263,16 @@ class DQNInference:
             x = torch.tensor(obs_n, dtype=torch.float32).unsqueeze(0)
             q = self.q_net_loaded(x)
             return Action(int(q.argmax(dim=1).item()))
+        
+    def get_policy(self, disc: Discretizer) -> np.ndarray:
+        S = disc.num_states()
+        centers = disc.state_centers()
+
+        policy = np.empty((S,), np.int32)
+
+        for s in range(S):
+            policy[s] = self.__call__(centers[s]).value
+
+        return policy
       
 

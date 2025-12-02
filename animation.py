@@ -13,7 +13,7 @@ from global_config import DiscretizerConfig, SimulationConfig
 from q_learning import DQNInference
 
 SCREEN_WIDTH = 800
-SCREEN_HEIGHT = 500
+SCREEN_HEIGHT = 600
 
 # Colors for each action
 ACTION_COLORS = {
@@ -54,6 +54,7 @@ class AEBArcadeViewer(arcade.Window):
         self.v_ego_hist = []
         self.v_lead_hist = []
         self.action_hist = []
+        self.ttc_hist = []
 
         # --- real-time control ---
         base = self.env.unwrapped
@@ -92,6 +93,7 @@ class AEBArcadeViewer(arcade.Window):
         self.v_ego_hist.clear()
         self.v_lead_hist.clear()
         self.action_hist.clear()
+        self.ttc_hist.clear()
         self._sim_time_accum = 0.0
         self._collided = False
         self._accumulated_reward = 0.0
@@ -122,6 +124,12 @@ class AEBArcadeViewer(arcade.Window):
         self.v_ego_hist.append(v_ego)
         self.v_lead_hist.append(v_lead)
         self.action_hist.append(a)
+        base = self.env.unwrapped
+        x_ego_m = getattr(base, "_x_s", 0.0)
+        x_lead_m = getattr(base, "_x_l", 30.0)
+        actor2 = Actor(x_ego_m, getattr(base, "_v_s"), length=5.0, width=2.0)
+        actor1 = Actor(x_lead_m, getattr(base, "_v_l"), length=5.0, width=2.0)
+        self.ttc_hist.append(compute_ttc(actor1, actor2))
 
         # trim
         if len(self.times) > self.max_history:
@@ -149,7 +157,7 @@ class AEBArcadeViewer(arcade.Window):
     def on_draw(self):
         self.clear()
 
-        lane_y = SCREEN_HEIGHT // 2 + 40
+        lane_y = SCREEN_HEIGHT // 2 + 80
         lane_height = 60
         draw_filled_rect(
             SCREEN_WIDTH // 2, lane_y, SCREEN_WIDTH, lane_height,
@@ -212,13 +220,14 @@ class AEBArcadeViewer(arcade.Window):
         if len(self.times) > 1:
             self._draw_speed_plot()
             self._draw_action_plot()
+            self._draw_ttc_plot()
 
     # --- speed plot (unchanged except for vertical placement) ---
     def _draw_speed_plot(self):
         margin = 40
         plot_left = margin
         plot_right = SCREEN_WIDTH - margin
-        plot_bottom = 1 + 140
+        plot_bottom = 1 + 140 + 100
         plot_top = 1 + plot_bottom + 80
 
         draw_outline_rect_lrtb(
@@ -254,6 +263,39 @@ class AEBArcadeViewer(arcade.Window):
             x2, y2 = to_px(tn[i],   vn_l[i])
             arcade.draw_line(x1, y1, x2, y2, arcade.color.ORANGE, 2)
 
+    def _draw_ttc_plot(self):
+        margin = 40
+        plot_left = margin
+        plot_right = SCREEN_WIDTH - margin
+        plot_bottom = 10
+        plot_top = 1 + plot_bottom + 80
+
+        draw_outline_rect_lrtb(
+            plot_left, plot_right, plot_top, plot_bottom,
+            arcade.color.DARK_SLATE_GRAY, border_width=1,
+        )
+        arcade.draw_text("ttc [s]", plot_left, plot_top + 5, arcade.color.BLACK, 10)
+
+        t = np.array(self.times)
+        ttc = np.array(self.ttc_hist)
+
+        t0, t1 = t[0], t[-1] if t[-1] > t[0] else (t[0] + 1e-6)
+        tn = (t - t0) / (t1 - t0 + 1e-9)
+
+        ttcmax = float(max(np.nanmax(ttc), 20.0))
+        ttcmin = 0.0
+        ttc = (ttc - ttcmin) / (ttcmax - ttcmin + 1e-9)
+
+        def to_px(tx, ttcy):
+            x = plot_left + tx * (plot_right - plot_left)
+            y = plot_bottom + ttcy * (plot_top - plot_bottom)
+            return x, y
+
+        for i in range(1, len(tn)):
+            x1, y1 = to_px(tn[i-1], ttc[i-1])
+            x2, y2 = to_px(tn[i],   ttc[i])
+            arcade.draw_line(x1, y1, x2, y2, arcade.color.BLUE, 2)
+
     def _draw_action_plot(self):
         if not self.action_hist:
             return
@@ -261,7 +303,7 @@ class AEBArcadeViewer(arcade.Window):
         margin = 40
         plot_left = margin + 1
         plot_right = SCREEN_WIDTH - margin + 1
-        plot_bottom = 10 
+        plot_bottom = 10 + 100
         plot_top = plot_bottom + 80
 
         draw_outline_rect_lrtb(
@@ -340,7 +382,7 @@ def main():
     def get_headway(speed):
         return speed * 0.277778 * 6.0
     
-    sc = Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=70, lead_speed_kmh=0.0, lead_decel_ms2=0.0, headway_m=116.66676000000001, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual')
+    sc = Scenario(family=Family.V2V_DECELERATING, subject_speed_kmh=80, lead_speed_kmh=80, lead_decel_ms2=3.92266, headway_m=20, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.5')
     sim_config = SimulationConfig()
     env = make_env(sc, RewardsModel(DeterministicModelConfig()), dt=sim_config.dt, max_time=sim_config.total_time)  # your custom env
 
@@ -354,8 +396,8 @@ def main():
         n_v_ego=disc_config.n_v_ego,
         n_v_npc=disc_config.n_v_npc,
     ) 
-    # executor = PolicyExecutor(disc, '/Users/htafish/projects/aa228/final_project/q_deterministic_planner.npy')
-    executor = DQNInference("aeb_dqn_qnet.pt")
+    executor = PolicyExecutor(disc, '/Users/htafish/projects/aa228/final_project/q_deterministic_planner.npy')
+    # executor = DQNInference("aeb_dqn_qnet.pt")
     window = AEBArcadeViewer(env, policy=executor, scale_m_to_px=8.0)
     arcade.run()
 

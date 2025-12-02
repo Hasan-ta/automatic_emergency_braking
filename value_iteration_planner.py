@@ -1,15 +1,18 @@
 from scenario_definitions import Family, Scenario
-from scenario_factory import make_env
+from scenario_factory import make_env, generate_training_scenarios
 from dataclasses import dataclass
-from deterministic_model import DeterministicModel, DeterministicModelConfig, load_model, build_deterministic_model, RewardsModel, plot_reward_slice_gap_ve, plot_U_slice_gap_ve
+from deterministic_model import DeterministicModel, DeterministicModelConfig, load_model, build_deterministic_model, RewardsModel, plot_reward_slice_gap_ve, plot_U_slice_gap_ve, build_transition_model, build_rewards_model, build_stochastic_model_sparse, StochasticModelSparse
 import numpy as np
 from discretizer import Discretizer
-from global_config import DiscretizerConfig
+from global_config import DiscretizerConfig, SimulationConfig
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+from q_learning import DQNInference
 
 @dataclass
 class PlannerConfig:
   gamma: float = 0.995
-  tol: float = 1e-6
+  tol: float = 1e-8
   max_iter: int = 10_000
 
 class ValueIterationPlanner:
@@ -43,35 +46,105 @@ class ValueIterationPlanner:
   def act(self, s: int) -> int:
     return int(np.argmax(self.Q[s]))
   
+  def get_policy(self) -> np.ndarray:
+    policy = np.empty((self.model.S,), np.int32)
+
+    for s in range(self.model.S):
+      policy[s] = self.act(s)
+
+    return policy
+
   def save_plan(self, path: str) -> None:
     np.save(path, self.Q)
+
+def plot_greedy_actions(policy: np.ndarray, disc: Discretizer, v_npc_fixed: float, action_labels=None, title: str | None = None,) -> None:
+  """
+  Visualize greedy action over (gap, v_ego) for a fixed v_npc.
+
+  disc   : GapDiscretizer with shape() -> (Ng, Nv_e, Nv_n)
+  policy : (S,) array of action indices from value iteration
+  v_npc_fixed : desired lead speed (m/s) to slice at
+  """
+
+  def get_bin_centers(bins: np.ndarray) -> np.ndarray:
+    return 0.5 * (bins[:-1] + bins[1:])
+
+  def find_vnpc_index_for_value(disc, v_npc_fixed: float) -> int:
+    """Pick the v_npc bin index whose center is closest to v_npc_fixed."""
+    v_n_centers = get_bin_centers(disc.v_npc_bins)
+    i_vn = int(np.argmin(np.abs(v_n_centers - v_npc_fixed)))
+    return i_vn
+
+  Ng, Nv_e, Nv_n = disc.shape()
+  S = disc.num_states()
+  assert policy.shape[0] == S
+
+  # 1. choose v_npc slice
+  i_vn = find_vnpc_index_for_value(disc, v_npc_fixed)
+  v_n_centers = get_bin_centers(disc.v_npc_bins)
+  v_npc_actual = v_n_centers[i_vn]
+
+  # 2. build 2D grid of greedy actions over (i_g, i_ve)
+  action_grid = np.zeros((Ng, Nv_e), dtype=int)
+
+  for i_g in range(Ng):
+    for i_ve in range(Nv_e):
+      s = disc.indices_to_state(i_g, i_ve, i_vn)
+      action_grid[i_g, i_ve] = policy[s]
+
+  # 3. coordinates for plotting
+  gap_centers = get_bin_centers(disc.gap_bins)
+  ve_centers  = get_bin_centers(disc.v_ego_bins)
+
+  extent = [gap_centers[0], gap_centers[-1], ve_centers[0], ve_centers[-1]]
+
+  # 4. colormap for actions (tweak as you like)
+  # Number of actions inferred from max index
+  n_actions = int(action_grid.max()) + 1
+  # simple distinct colors; you can customize
+  base_colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
+  cmap = ListedColormap(base_colors[:n_actions])
+
+  plt.figure(figsize=(7, 4))
+  im = plt.imshow(
+    action_grid.T,
+    origin="lower",
+    aspect="auto",
+    extent=extent,
+    cmap=cmap,
+    interpolation="nearest",
+  )
+  plt.xlabel("gap [m]")
+  plt.ylabel("v_ego [m/s]")
+
+  if title is None:
+    title = f"Greedy action over (gap, v_ego) at v_npc ≈ {v_npc_actual:.2f} m/s"
+  plt.title(title)
+
+  # 5. custom legend for actions
+  if action_labels is None:
+    # default labels for your AEB actions
+    action_labels = ["Nothing", "Warning", "SoftBrake", "StrongBrake"][:n_actions]
+
+  # build fake handles for legend
+  from matplotlib.patches import Patch
+  handles = [
+    Patch(color=cmap(i), label=f"{i}: {action_labels[i]}")
+    for i in range(n_actions)
+  ]
+  plt.legend(handles=handles, title="Action", loc="upper right")
+
+  plt.tight_layout()
+  plt.show()
   
 
 # =============== Small demo ===============
 if __name__ == "__main__":
   # signal.signal(signal.SIGINT, signal_handler)
 
-  scenarios = []
-  # sc = next(s for s in generate_fmvss127()
-  #           if s.family == Family.V2V_DECELERATING and s.subject_speed_kmh == 80 and s.headway_m == 20)
-  # scenarios.append(sc)
-  # scenarios.append(Scenario(Family.V2V_STATIONARY, 50, 0, manual_brake=False, headway_m=40, note="S7.3 no manual"))
+  scenarios = generate_training_scenarios()
 
-  # for v in list(range(10, 81, 10)):
-  #     scenarios.append(Scenario(Family.V2V_STATIONARY, v, 0, manual_brake=False, headway_m=6*0.277778*v, note="S7.3 no manual"))
-  # for v in [40, 50, 60, 70, 80]:
-  #     scenarios.append(Scenario(Family.V2V_SLOWER_MOVING, v, 20, manual_brake=False, headway_m=6*(v-20)*277778, note="S7.4 no manual"))
-  # for v in [50, 80]:
-  #     for hw in [12, 20, 30, 40]:
-  #         for decel_g in [0.3, 0.4, 0.5]:
-  #             for manual in [False]:
-  #                 scenarios.append(Scenario(Family.V2V_DECELERATING, v, v, lead_decel_ms2=decel_g*9.80665,
-  #                                headway_m=hw, manual_brake=manual, note="S7.5"))
-
-  scenarios.append(Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=10, lead_speed_kmh=0, lead_decel_ms2=None, headway_m=16.66668, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'))
-  scenarios.append(Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=50, lead_speed_kmh=0, lead_decel_ms2=0.0, headway_m=84, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'))
-  scenarios.append(Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=40, lead_speed_kmh=20, lead_decel_ms2=None, headway_m=16.66668, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'))
-  scenarios.append(Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=600, lead_speed_kmh=20, lead_decel_ms2=0.0, headway_m=84, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'))
+  sim_config = SimulationConfig()
 
   # Discretization grids (tune to your dynamics):
   # Gap up to 60m, rel_speed -30..30 m/s, ego 0..40 m/s
@@ -87,18 +160,33 @@ if __name__ == "__main__":
   ) 
 
   model_cfg = DeterministicModelConfig()
-  next_state, reward, terminal = build_deterministic_model(disc, dt=0.1, config=model_cfg)
-  np.save("model_next_state.npy", next_state)
-  np.save("model_reward.npy", reward)
-  np.save("model_terminal.npy", terminal)
-  model = load_model('model_next_state.npy', 'model_reward.npy', 'model_terminal.npy')
-  plot_reward_slice_gap_ve(disc, model.reward, 2, 0.0, 1.0)
+  # next_state = build_deterministic_model(disc, dt=0.1, config=model_cfg)
+  
+  # np.save("model_next_state.npy", next_state)
+  # np.save("model_reward.npy", reward)
+  # np.save("model_terminal.npy", terminal)
+  # model = load_model('model_next_state.npy', 'model_reward.npy', 'model_terminal.npy')
+  # transitions = build_transition_model(disc, dt=sim_config.dt)
 
-  plan_cfg = PlannerConfig(gamma=0.99, tol=1e-6, max_iter=10_000)
+  # model = build_stochastic_model_sparse(disc, sim_config.dt, model_cfg)
+  # model.save()
+  model = StochasticModelSparse.load(disc.num_states(), 4)
+    
+  # plot_reward_slice_gap_ve(disc, model.reward, 2, 0.0, 1.0)
+
+  plan_cfg = PlannerConfig(gamma=0.96, tol=1e-8, max_iter=10_000)
   planner = ValueIterationPlanner(model, plan_cfg)
   planner.plan()
-  planner.save_plan("q_deterministic_planner.npy")
-  plot_U_slice_gap_ve(disc, planner.U, 0.0, 1.0)
+  policy = planner.get_policy()
+  # executor = DQNInference("aeb_dqn_qnet.pt")
+  # policy = executor.get_policy(disc)
+  plot_greedy_actions(policy, disc, 0.0)
+  plot_greedy_actions(policy, disc, 4.0)
+  plot_greedy_actions(policy, disc, 8.0)
+  plot_greedy_actions(policy, disc, 12.0)
+  plot_greedy_actions(policy, disc, 16.0)
+  # planner.save_plan("q_deterministic_planner.npy")
+  # plot_U_slice_gap_ve(disc, planner.U, 4.0, 1.0)
 
   # Evaluate the learned policy without exploration
   def evaluate_policy(env, disc: Discretizer, planner: ValueIterationPlanner, episodes=10, seed=123):
@@ -121,7 +209,7 @@ if __name__ == "__main__":
   for sc in scenarios:
     print(f"scenario: {sc}:")
     rewards_model = RewardsModel(model_cfg)
-    env = make_env(sc, rewards_model, dt=0.1)
+    env = make_env(sc, rewards_model, dt=sim_config.dt, max_time=sim_config.total_time)
     mean_ret, std_ret = evaluate_policy(env, disc, planner, episodes=10)
     print(f"Evaluation: mean return={mean_ret:.2f} ± {std_ret:.2f}")
     env.close()

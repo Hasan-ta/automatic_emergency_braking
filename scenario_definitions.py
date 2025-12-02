@@ -71,7 +71,7 @@ class Scene:
 
   @classmethod
   def from_scenario_definition(cls, scenario: Scenario) -> "Scene":
-    return cls(length=scenario.headway_m + 40.0, width=5.0)
+    return cls(length=scenario.headway_m + scenario.lead_speed_kmh*0.277778 * 24, width=5.0)
 
 
 @dataclass
