@@ -7,7 +7,7 @@ from scenario_definitions import Scenario, Family, Actor, Action
 from scenario_factory import make_env
 from simulation_utils import compute_ttc, compute_gap
 from policy_executor import PolicyExecutor
-from discretizer import Discretizer
+from discretizer import Discretizer, GapEgoAccelDiscretizer
 from deterministic_model import RewardsModel, DeterministicModelConfig
 from global_config import DiscretizerConfig, SimulationConfig
 from q_learning import DQNInference
@@ -382,18 +382,21 @@ def main():
     def get_headway(speed):
         return speed * 0.277778 * 6.0
     
-    sc = Scenario(family=Family.V2V_DECELERATING, subject_speed_kmh=80, lead_speed_kmh=80, lead_decel_ms2=3.92266, headway_m=20, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.5')
+    sc= Scenario(family=Family.V2V_DECELERATING, subject_speed_kmh=80, lead_speed_kmh=80, lead_decel_ms2=4.903325, headway_m=40, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.5')
     sim_config = SimulationConfig()
     env = make_env(sc, RewardsModel(DeterministicModelConfig()), dt=sim_config.dt, max_time=sim_config.total_time)  # your custom env
 
     disc_config = DiscretizerConfig()
-    disc = Discretizer.from_ranges(
+    disc = GapEgoAccelDiscretizer.from_ranges(
         gap_min=disc_config.gap_min,
         gap_max=disc_config.gap_max,
         v_min=disc_config.v_min,
         v_max=disc_config.v_max,      # m/s
+        a_min=disc_config.a_min,
+        a_max=disc_config.a_max,      # m/s
         n_gap=disc_config.n_gap,
         n_v_ego=disc_config.n_v_ego,
+        n_a_ego=disc_config.n_a_ego,
         n_v_npc=disc_config.n_v_npc,
     ) 
     executor = PolicyExecutor(disc, '/Users/htafish/projects/aa228/final_project/q_deterministic_planner.npy')

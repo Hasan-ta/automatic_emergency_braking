@@ -1,12 +1,13 @@
 from scenario_definitions import Family, Scenario
 from scenario_factory import make_env, generate_training_scenarios
 from dataclasses import dataclass
-from deterministic_model import DeterministicModel, DeterministicModelConfig, load_model, build_deterministic_model, RewardsModel, plot_reward_slice_gap_ve, plot_U_slice_gap_ve, build_transition_model, build_rewards_model, build_stochastic_model_sparse, StochasticModelSparse
+from deterministic_model import DeterministicModel, DeterministicModelConfig, RewardsModel, plot_reward_slice_gap_ve, plot_U_slice_gap_ve, build_stochastic_model_sparse, StochasticModelSparse, build_rewards_model
 import numpy as np
-from discretizer import Discretizer
+from discretizer import Discretizer, GapEgoAccelDiscretizer
 from global_config import DiscretizerConfig, SimulationConfig
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
+from matplotlib.patches import Patch
 from q_learning import DQNInference
 
 @dataclass
@@ -57,85 +58,101 @@ class ValueIterationPlanner:
   def save_plan(self, path: str) -> None:
     np.save(path, self.Q)
 
-def plot_greedy_actions(policy: np.ndarray, disc: Discretizer, v_npc_fixed: float, action_labels=None, title: str | None = None,) -> None:
-  """
-  Visualize greedy action over (gap, v_ego) for a fixed v_npc.
+def plot_greedy_actions_gap_ve(
+    policy: np.ndarray,
+    disc,
+    v_npc_fixed: float,
+    a_ego_fixed: float = 0.0,
+    action_labels=None,
+    title: str | None = None,
+):
+    """
+    Visualize greedy actions over (gap, v_ego) for a fixed (a_ego, v_npc).
 
-  disc   : GapDiscretizer with shape() -> (Ng, Nv_e, Nv_n)
-  policy : (S,) array of action indices from value iteration
-  v_npc_fixed : desired lead speed (m/s) to slice at
-  """
+    disc   : GapEgoAccelDiscretizer
+    policy : (S,) array of greedy action indices (e.g. 0..3)
+    v_npc_fixed : desired lead speed (m/s) for the slice
+    a_ego_fixed : desired ego acceleration (m/s^2) for the slice
+    """
 
-  def get_bin_centers(bins: np.ndarray) -> np.ndarray:
-    return 0.5 * (bins[:-1] + bins[1:])
+    def _bin_centers(bins: np.ndarray) -> np.ndarray:
+      return 0.5 * (bins[:-1] + bins[1:])
 
-  def find_vnpc_index_for_value(disc, v_npc_fixed: float) -> int:
-    """Pick the v_npc bin index whose center is closest to v_npc_fixed."""
-    v_n_centers = get_bin_centers(disc.v_npc_bins)
-    i_vn = int(np.argmin(np.abs(v_n_centers - v_npc_fixed)))
-    return i_vn
 
-  Ng, Nv_e, Nv_n = disc.shape()
-  S = disc.num_states()
-  assert policy.shape[0] == S
+    def _find_bin_index_for_value(bins: np.ndarray, value: float) -> int:
+        """Pick the bin whose center is closest to 'value'."""
+        centers = _bin_centers(bins)
+        idx = int(np.argmin(np.abs(centers - value)))
+        return idx
 
-  # 1. choose v_npc slice
-  i_vn = find_vnpc_index_for_value(disc, v_npc_fixed)
-  v_n_centers = get_bin_centers(disc.v_npc_bins)
-  v_npc_actual = v_n_centers[i_vn]
+    Ng, Nv_e, Na_e, Nv_n = disc.shape()
+    S = disc.num_states()
+    assert policy.shape[0] == S
 
-  # 2. build 2D grid of greedy actions over (i_g, i_ve)
-  action_grid = np.zeros((Ng, Nv_e), dtype=int)
+    # --- 1. choose slice indices for v_npc and a_ego ---
 
-  for i_g in range(Ng):
-    for i_ve in range(Nv_e):
-      s = disc.indices_to_state(i_g, i_ve, i_vn)
-      action_grid[i_g, i_ve] = policy[s]
+    i_vn = _find_bin_index_for_value(disc.v_npc_bins, v_npc_fixed)
+    i_ae = _find_bin_index_for_value(disc.a_ego_bins, a_ego_fixed)
 
-  # 3. coordinates for plotting
-  gap_centers = get_bin_centers(disc.gap_bins)
-  ve_centers  = get_bin_centers(disc.v_ego_bins)
+    v_npc_centers = _bin_centers(disc.v_npc_bins)
+    a_ego_centers = _bin_centers(disc.a_ego_bins)
+    v_npc_actual = float(v_npc_centers[i_vn])
+    a_ego_actual = float(a_ego_centers[i_ae])
 
-  extent = [gap_centers[0], gap_centers[-1], ve_centers[0], ve_centers[-1]]
+    # --- 2. build 2D grid of actions over (i_gap, i_ve) ---
 
-  # 4. colormap for actions (tweak as you like)
-  # Number of actions inferred from max index
-  n_actions = int(action_grid.max()) + 1
-  # simple distinct colors; you can customize
-  base_colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
-  cmap = ListedColormap(base_colors[:n_actions])
+    action_grid = np.zeros((Ng, Nv_e), dtype=int)
 
-  plt.figure(figsize=(7, 4))
-  im = plt.imshow(
-    action_grid.T,
-    origin="lower",
-    aspect="auto",
-    extent=extent,
-    cmap=cmap,
-    interpolation="nearest",
-  )
-  plt.xlabel("gap [m]")
-  plt.ylabel("v_ego [m/s]")
+    for i_g in range(Ng):
+        for i_ve in range(Nv_e):
+            s = disc.indices_to_state(i_g, i_ve, i_ae, i_vn)
+            action_grid[i_g, i_ve] = int(policy[s])
 
-  if title is None:
-    title = f"Greedy action over (gap, v_ego) at v_npc ≈ {v_npc_actual:.2f} m/s"
-  plt.title(title)
+    # --- 3. coordinates for plotting ---
 
-  # 5. custom legend for actions
-  if action_labels is None:
-    # default labels for your AEB actions
-    action_labels = ["Nothing", "Warning", "SoftBrake", "StrongBrake"][:n_actions]
+    gap_centers = _bin_centers(disc.gap_bins)
+    ve_centers  = _bin_centers(disc.v_ego_bins)
 
-  # build fake handles for legend
-  from matplotlib.patches import Patch
-  handles = [
-    Patch(color=cmap(i), label=f"{i}: {action_labels[i]}")
-    for i in range(n_actions)
-  ]
-  plt.legend(handles=handles, title="Action", loc="upper right")
+    extent = [gap_centers[0], gap_centers[-1],
+              ve_centers[0],  ve_centers[-1]]
 
-  plt.tight_layout()
-  plt.show()
+    # --- 4. colormap + legend ---
+
+    n_actions = int(action_grid.max()) + 1
+    base_colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
+    cmap = ListedColormap(base_colors[:n_actions])
+
+    if action_labels is None:
+        # default for your AEB actions
+        action_labels = ["Nothing", "Warning", "SoftBrake", "StrongBrake"][:n_actions]
+
+    plt.figure(figsize=(7, 4))
+    im = plt.imshow(
+        action_grid.T,
+        origin="lower",
+        aspect="auto",
+        extent=extent,
+        cmap=cmap,
+        interpolation="nearest",
+    )
+    plt.xlabel("gap [m]")
+    plt.ylabel("v_ego [m/s]")
+
+    if title is None:
+        title = (f"Greedy action over (gap, v_ego)\n"
+                 f"slice at v_npc ≈ {v_npc_actual:.2f} m/s, "
+                 f"a_ego ≈ {a_ego_actual:.2f} m/s²")
+    plt.title(title)
+
+    # legend
+    handles = [
+        Patch(color=cmap(i), label=f"{i}: {action_labels[i]}")
+        for i in range(n_actions)
+    ]
+    plt.legend(handles=handles, title="Action", loc="upper right")
+
+    plt.tight_layout()
+    plt.show()
   
 
 # =============== Small demo ===============
@@ -149,30 +166,37 @@ if __name__ == "__main__":
   # Discretization grids (tune to your dynamics):
   # Gap up to 60m, rel_speed -30..30 m/s, ego 0..40 m/s
   disc_config = DiscretizerConfig()
-  disc = Discretizer.from_ranges(
+  # disc = Discretizer.from_ranges(
+  #   gap_min=disc_config.gap_min,
+  #   gap_max=disc_config.gap_max,
+  #   v_min=disc_config.v_min,
+  #   v_max=disc_config.v_max,      # m/s
+  #   n_gap=disc_config.n_gap,
+  #   n_v_ego=disc_config.n_v_ego,
+  #   n_v_npc=disc_config.n_v_npc,
+  # ) 
+
+  disc = GapEgoAccelDiscretizer.from_ranges(
     gap_min=disc_config.gap_min,
     gap_max=disc_config.gap_max,
     v_min=disc_config.v_min,
     v_max=disc_config.v_max,      # m/s
+    a_min=disc_config.a_min,
+    a_max=disc_config.a_max,      # m/s
     n_gap=disc_config.n_gap,
     n_v_ego=disc_config.n_v_ego,
+    n_a_ego=disc_config.n_a_ego,
     n_v_npc=disc_config.n_v_npc,
   ) 
 
   model_cfg = DeterministicModelConfig()
-  # next_state = build_deterministic_model(disc, dt=0.1, config=model_cfg)
-  
-  # np.save("model_next_state.npy", next_state)
-  # np.save("model_reward.npy", reward)
-  # np.save("model_terminal.npy", terminal)
-  # model = load_model('model_next_state.npy', 'model_reward.npy', 'model_terminal.npy')
-  # transitions = build_transition_model(disc, dt=sim_config.dt)
 
-  # model = build_stochastic_model_sparse(disc, sim_config.dt, model_cfg)
-  # model.save()
+  model = build_stochastic_model_sparse(disc, sim_config.dt, model_cfg)
+  model.save()
   model = StochasticModelSparse.load(disc.num_states(), 4)
+  # model.reward = build_rewards_model(disc, dt=sim_config.dt, config=model_cfg)
     
-  # plot_reward_slice_gap_ve(disc, model.reward, 2, 0.0, 1.0)
+  plot_reward_slice_gap_ve(disc, model.reward, 2, 0.0, 1.0)
 
   plan_cfg = PlannerConfig(gamma=0.96, tol=1e-8, max_iter=10_000)
   planner = ValueIterationPlanner(model, plan_cfg)
@@ -180,11 +204,11 @@ if __name__ == "__main__":
   policy = planner.get_policy()
   # executor = DQNInference("aeb_dqn_qnet.pt")
   # policy = executor.get_policy(disc)
-  plot_greedy_actions(policy, disc, 0.0)
-  plot_greedy_actions(policy, disc, 4.0)
-  plot_greedy_actions(policy, disc, 8.0)
-  plot_greedy_actions(policy, disc, 12.0)
-  plot_greedy_actions(policy, disc, 16.0)
+  plot_greedy_actions_gap_ve(policy, disc, 0.0, 0.0)
+  plot_greedy_actions_gap_ve(policy, disc, 4.0, 0.0)
+  plot_greedy_actions_gap_ve(policy, disc, 8.0, 0.0)
+  plot_greedy_actions_gap_ve(policy, disc, 12.0, 0.0)
+  plot_greedy_actions_gap_ve(policy, disc, 16.0, 0.0)
   # planner.save_plan("q_deterministic_planner.npy")
   # plot_U_slice_gap_ve(disc, planner.U, 4.0, 1.0)
 

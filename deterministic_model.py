@@ -23,6 +23,7 @@ class DeterministicModelConfig:
 class State:
   x_npc_in_ego: float
   v_ego: float
+  a_ego: float
   v_npc: float
 
 @dataclass
@@ -85,26 +86,39 @@ def terminal_state(state: State, config: DeterministicModelConfig) -> bool:
 
 import numpy as np
 
-def _sample_from_cell_3d(disc: Discretizer, s: int, n_samples: int) -> np.ndarray:
-  """
-  Sample continuous states uniformly from inside cell s.
+import numpy as np
 
-  disc: GapDiscretizer with gap_bins, v_ego_bins, v_npc_bins
-  s:    discrete state id
-  returns: samples of shape (n_samples, 3) = [gap, v_ego, v_npc]
+def _sample_from_cell_4d(disc, s: int, n_samples: int) -> np.ndarray:
   """
-  i_g, i_ve, i_vn = disc.state_to_indices(s)
+  Sample continuous states uniformly from inside cell s for the
+  GapEgoAccelDiscretizer (gap, v_ego, a_ego, v_npc).
 
-  g_low, g_high   = disc.gap_bins[i_g],     disc.gap_bins[i_g + 1]
+  disc     : GapEgoAccelDiscretizer
+  s        : discrete state index
+  n_samples: number of samples to draw
+
+  Returns:
+      samples: (n_samples, 4) array with columns
+                [gap, v_ego, a_ego, v_npc]
+  """
+  # Decode the 4D indices for this state
+  i_g, i_ve, i_ae, i_vn = disc.state_to_indices(s)
+
+  # Get bin bounds in each dimension
+  g_low,  g_high  = disc.gap_bins[i_g],     disc.gap_bins[i_g + 1]
   ve_low, ve_high = disc.v_ego_bins[i_ve],  disc.v_ego_bins[i_ve + 1]
+  ae_low, ae_high = disc.a_ego_bins[i_ae],  disc.a_ego_bins[i_ae + 1]
   vn_low, vn_high = disc.v_npc_bins[i_vn],  disc.v_npc_bins[i_vn + 1]
 
-  gaps   = np.random.uniform(g_low,   g_high,   size=n_samples)
-  v_ego  = np.random.uniform(ve_low,  ve_high,  size=n_samples)
-  v_npc  = np.random.uniform(vn_low,  vn_high,  size=n_samples)
+  # Sample uniformly in each dimension
+  gaps   = np.random.uniform(g_low,  g_high,  size=n_samples)
+  v_ego  = np.random.uniform(ve_low, ve_high, size=n_samples)
+  a_ego  = np.random.uniform(ae_low, ae_high, size=n_samples)
+  v_npc  = np.random.uniform(vn_low, vn_high, size=n_samples)
 
-  samples = np.stack([gaps, v_ego, v_npc], axis=1).astype(np.float64)
+  samples = np.stack([gaps, v_ego, a_ego, v_npc], axis=1).astype(np.float64)
   return samples
+
 
 
 class RewardsModel:
@@ -112,8 +126,6 @@ class RewardsModel:
     self.config = config
 
   def __call__(self, state: State, action: int | Action, next_state: State) -> float:
-    # if(terminal_state(state, self.config)):
-    #   return 0.0
     if not isinstance(action, Action):
       action = Action(action)
 
@@ -124,26 +136,23 @@ class RewardsModel:
       r += self.config.collision_penalty
       return r
 
-    # elif _stopped(next_state, self.config):
-    #   stop_gap_penalty = -1.0 * self.config.stop_gap_penalty_multiplier * _gap(next_state, self.config)
-    #   r += stop_gap_penalty
+    acc_diff = abs(state.a_ego - next_state.a_ego)
+    r -= acc_diff*2
 
     ttc = compute_ttc(state, self.config)
     if (ttc > 6.0) and (action == Action.SoftBrake or action == Action.StrongBrake):
       r += -2000
       return r
     
-    # print(f"action: {action}")
     if action == Action.SoftBrake:
       r += self.config.soft_brake_penalty * ttc
     elif action == Action.StrongBrake:
-      # print(f"added strong braking penalty")
       r += self.config.strong_brake_penalty * ttc
 
     return r
   
 def _step_continuous_gap_model(
-    states: np.ndarray,  # shape (N,3) = [gap, v_ego, v_npc]
+    states: np.ndarray,  # shape (N,3) = [gap, v_ego, a_ego, v_npc]
     action: Action,
     dt: float,
     process_noise_std: np.ndarray | None = None,
@@ -153,17 +162,19 @@ def _step_continuous_gap_model(
   """
   gap = states[:, 0]
   v_e = states[:, 1]
-  v_n = states[:, 2]
+  a_e = states[:, 2]
+  v_n = states[:, 3]
 
-  a_e = EGO_ACTION_DECEL[action]
+  a_e_action = EGO_ACTION_DECEL[action]
 
   # simple Euler-ish update; you can use your exact model
   # gap_{t+1} = gap_t + (v_n - v_e) * dt
-  gap_next = gap + (v_n - v_e) * dt
-  v_e_next = np.maximum(0.0, v_e + a_e * dt)
+  gap_next = gap + (v_n - v_e) * dt - 0.5*a_e*dt*dt
+  a_e_next = np.full_like(a_e, a_e_action)
+  v_e_next = np.maximum(0.0, v_e + a_e_next * dt)
   v_n_next = np.maximum(0.0, v_n)
 
-  x_next = np.stack([gap_next, v_e_next, v_n_next], axis=1)
+  x_next = np.stack([gap_next, v_e_next, a_e_next, v_n_next], axis=1)
 
   if process_noise_std is not None:
       noise = np.random.randn(*x_next.shape) * process_noise_std[None, :]
@@ -171,80 +182,80 @@ def _step_continuous_gap_model(
 
   return x_next.astype(np.float64)
 
-def mc_transition_row_sparse(
-    disc: Discretizer,
-    s: int,
-    action: Action,
-    dt: float,
-    n_samples: int = 512,
-    process_noise_std: np.ndarray | None = None,
-):
-  """
-  Returns the nonzero entries of the Monte Carlo transition row:
+# def mc_transition_row_sparse(
+#     disc: Discretizer,
+#     s: int,
+#     action: Action,
+#     dt: float,
+#     n_samples: int = 512,
+#     process_noise_std: np.ndarray | None = None,
+# ):
+#   """
+#   Returns the nonzero entries of the Monte Carlo transition row:
 
-  - next_states: 1D array of column indices
-  - probs      : 1D array of probabilities, same length
-  """
-  S = disc.num_states()
-  samples = _sample_from_cell_3d(disc, s, n_samples)
-  x_next = _step_continuous_gap_model(
-    samples,
-    action=action,
-    dt=dt,
-    process_noise_std=process_noise_std,
-  )
+#   - next_states: 1D array of column indices
+#   - probs      : 1D array of probabilities, same length
+#   """
+#   S = disc.num_states()
+#   samples = _sample_from_cell_3d(disc, s, n_samples)
+#   x_next = _step_continuous_gap_model(
+#     samples,
+#     action=action,
+#     dt=dt,
+#     process_noise_std=process_noise_std,
+#   )
 
-  next_states = np.array([disc.obs_to_state(x_next[i]) for i in range(n_samples)], dtype=np.int32)
-  counts = np.bincount(next_states, minlength=S).astype(np.float64)
-  nz = np.nonzero(counts)[0]
+#   next_states = np.array([disc.obs_to_state(x_next[i]) for i in range(n_samples)], dtype=np.int32)
+#   counts = np.bincount(next_states, minlength=S).astype(np.float64)
+#   nz = np.nonzero(counts)[0]
 
-  if len(nz) == 0:
-    return np.array([s], dtype=np.int32), np.array([1.0], dtype=np.float64)
+#   if len(nz) == 0:
+#     return np.array([s], dtype=np.int32), np.array([1.0], dtype=np.float64)
 
-  probs = counts[nz] / counts.sum()
-  return nz.astype(np.int32), probs.astype(np.float64)
+#   probs = counts[nz] / counts.sum()
+#   return nz.astype(np.int32), probs.astype(np.float64)
 
-def build_transition_csr_for_action(disc:Discretizer, dt: float, action: Action, S: int, n_samples=512):
-  row_idx = []
-  col_idx = []
-  data = []
+# def build_transition_csr_for_action(disc:Discretizer, dt: float, action: Action, S: int, n_samples=512):
+#   row_idx = []
+#   col_idx = []
+#   data = []
 
-  print(f"building T(s' | s, {action}) for {S} states")
-  for s in range(S):
-    if (s+1) % 1000 == 0:
-      print(f"{s+1} states done!")
-    cols, probs = mc_transition_row_sparse(
-      disc,
-      s=s,
-      action=action,
-      dt=dt,
-      n_samples=n_samples,
-    )
-    row_idx.append(np.full(len(cols), s, dtype=np.int32))
-    col_idx.append(cols)
-    data.append(probs)
+#   print(f"building T(s' | s, {action}) for {S} states")
+#   for s in range(S):
+#     if (s+1) % 1000 == 0:
+#       print(f"{s+1} states done!")
+#     cols, probs = mc_transition_row_sparse(
+#       disc,
+#       s=s,
+#       action=action,
+#       dt=dt,
+#       n_samples=n_samples,
+#     )
+#     row_idx.append(np.full(len(cols), s, dtype=np.int32))
+#     col_idx.append(cols)
+#     data.append(probs)
 
-  row_idx = np.concatenate(row_idx)
-  col_idx = np.concatenate(col_idx)
-  data = np.concatenate(data)
+#   row_idx = np.concatenate(row_idx)
+#   col_idx = np.concatenate(col_idx)
+#   data = np.concatenate(data)
 
-  P_a = csr_matrix((data, (row_idx, col_idx)), shape=(S, S))
-  return P_a
+#   P_a = csr_matrix((data, (row_idx, col_idx)), shape=(S, S))
+#   return P_a
 
-def build_transition_model(disc:Discretizer, dt: float) -> List:
-  S = disc.num_states()
-  transition_matrices = []
-  for a_enum in Action:
-    P_a = build_transition_csr_for_action(
-      disc=disc,
-      dt=dt,
-      action=a_enum,
-      S=S,
-      n_samples=512,
-    )
-    transition_matrices.append(P_a)
+# def build_transition_model(disc:Discretizer, dt: float) -> List:
+#   S = disc.num_states()
+#   transition_matrices = []
+#   for a_enum in Action:
+#     P_a = build_transition_csr_for_action(
+#       disc=disc,
+#       dt=dt,
+#       action=a_enum,
+#       S=S,
+#       n_samples=512,
+#     )
+#     transition_matrices.append(P_a)
 
-  return transition_matrices
+#   return transition_matrices
 
 def build_rewards_model(disc: Discretizer, dt: float, config: DeterministicModelConfig):
 
@@ -262,8 +273,8 @@ def build_rewards_model(disc: Discretizer, dt: float, config: DeterministicModel
     if (s+1) % 10000 == 0:
       print(f"{s+1} states done!")
     # Continuous center for this discrete state
-    x_npc, v_ego, v_npc = centers[s]
-    current_state = State(x_npc, v_ego, v_npc)
+    x_npc, v_ego, a_ego, v_npc = centers[s]
+    current_state = State(x_npc, v_ego, a_ego, v_npc)
 
     for a_idx, a_enum in enumerate(Action):
       # --- dynamics: one step of constant-acceleration integration ---
@@ -271,13 +282,15 @@ def build_rewards_model(disc: Discretizer, dt: float, config: DeterministicModel
       # Ego
       ax_e = EGO_ACTION_DECEL[a_enum]
       v_e_next = max(0.0, v_ego + ax_e * dt)
+      a_e_next = ax_e
 
       v_rel = v_npc - v_ego
       x_n_next = x_npc + v_rel * dt - 0.5 * ax_e * dt * dt
       v_n_next = v_npc
 
+
       # --- map next continuous state back to discrete ---
-      state_prime = State(x_n_next, v_e_next, v_n_next)
+      state_prime = State(x_n_next, v_e_next, a_e_next, v_n_next)
 
       reward[s, a_idx] = rewards_model(current_state, a_enum, state_prime)
 
@@ -308,7 +321,7 @@ def mc_transition_row_sa_sparse(
     rewards_model = RewardsModel(config)
 
     # 1) sample continuous states in cell s
-    samples = _sample_from_cell_3d(disc, s, n_samples)  # (N,3) = [gap, v_ego, v_npc]
+    samples = _sample_from_cell_4d(disc, s, n_samples)  # (N,3) = [gap, v_ego, v_npc]
 
     # 2) propagate them
     x_next = _step_continuous_gap_model(
@@ -328,10 +341,7 @@ def mc_transition_row_sa_sparse(
 
         sp = disc.obs_to_state(xn)
 
-        # collision / reward logic as in your env
-        gap_next = xn[0]
-        collided = gap_next < 0.0  # or your actual rectangle-overlap check
-        r = rewards_model(State(x[0], x[1], x[2]), action, State(xn[0], xn[1], xn[2]))
+        r = rewards_model(State(x[0], x[1], x[2], x[3]), action, State(xn[0], xn[1], xn[2], xn[3]))
 
         counts[sp] += 1
         rewards[i] = r
@@ -424,92 +434,92 @@ def build_stochastic_model_sparse(
   return StochasticModelSparse(S, A, transition_mats, R_sa)
 
 
-def build_deterministic_model(
-  disc: Discretizer,
-  dt: float,
-  config: DeterministicModelConfig
-):
-  """
-  Precompute a deterministic, stationary MDP model for the V2V AEB problem.
+# def build_deterministic_model(
+#   disc: Discretizer,
+#   dt: float,
+#   config: DeterministicModelConfig
+# ):
+#   """
+#   Precompute a deterministic, stationary MDP model for the V2V AEB problem.
 
-  States are discretized via `disc` for obs = [x_npc, v_ego, v_npc].
-  Dynamics are:
-    - Ego acceleration determined by Action (EGO_ACTION_DECEL)
-    - NPC acceleration = lead_decel_ms2 (from scenario)
-    - Constant-acceleration integration per time step dt
+#   States are discretized via `disc` for obs = [x_npc, v_ego, v_npc].
+#   Dynamics are:
+#     - Ego acceleration determined by Action (EGO_ACTION_DECEL)
+#     - NPC acceleration = lead_decel_ms2 (from scenario)
+#     - Constant-acceleration integration per time step dt
 
-  Returns:
-    next_state: (S, A) int array, next_state[s, a] = s'
-    reward:     (S, A) float array, reward[s, a]
-    terminal:   (S,) bool array, True if state is terminal
-  """
-  S = disc.num_states()
-  A = len(Action)
-  rewards_model = RewardsModel(config)
+#   Returns:
+#     next_state: (S, A) int array, next_state[s, a] = s'
+#     reward:     (S, A) float array, reward[s, a]
+#     terminal:   (S,) bool array, True if state is terminal
+#   """
+#   S = disc.num_states()
+#   A = len(Action)
+#   rewards_model = RewardsModel(config)
 
-  next_state = np.zeros((S, A), dtype=np.int32)
-  reward = np.zeros((S, A), dtype=np.float64)
-  terminal = np.zeros(S, dtype=bool)
+#   next_state = np.zeros((S, A), dtype=np.int32)
+#   reward = np.zeros((S, A), dtype=np.float64)
+#   terminal = np.zeros(S, dtype=bool)
 
-  # Precompute centers for all states: shape (S,4)
-  centers = disc.state_centers()
+#   # Precompute centers for all states: shape (S,4)
+#   centers = disc.state_centers()
 
-  print(f"building model for {S} states")
-  for s in range(S):
-    if (s+1) % 10000 == 0:
-      print(f"{s+1} states done!")
-    # Continuous center for this discrete state
-    x_npc, v_ego, v_npc = centers[s]
-    current_state = State(x_npc, v_ego, v_npc)
+#   print(f"building model for {S} states")
+#   for s in range(S):
+#     if (s+1) % 10000 == 0:
+#       print(f"{s+1} states done!")
+#     # Continuous center for this discrete state
+#     x_npc, v_ego, v_npc = centers[s]
+#     current_state = State(x_npc, v_ego, v_npc)
 
-    # Optionally mark impossible states as terminal (e.g. ego behind 0, lead behind 0)
-    # You can tighten this logic as you like:
-    # if terminal_state(current_state, config):
-    #   print(f"current_state: {current_state} is terminal")
-    #   terminal[s] = True
-    #   for a_idx in range(A):
-    #     next_state[s, a_idx] = s
-    #     reward[s, a_idx] = 0.0
-    #   continue
+#     # Optionally mark impossible states as terminal (e.g. ego behind 0, lead behind 0)
+#     # You can tighten this logic as you like:
+#     # if terminal_state(current_state, config):
+#     #   print(f"current_state: {current_state} is terminal")
+#     #   terminal[s] = True
+#     #   for a_idx in range(A):
+#     #     next_state[s, a_idx] = s
+#     #     reward[s, a_idx] = 0.0
+#     #   continue
 
-    for a_idx, a_enum in enumerate(Action):
-      # --- dynamics: one step of constant-acceleration integration ---
+#     for a_idx, a_enum in enumerate(Action):
+#       # --- dynamics: one step of constant-acceleration integration ---
 
-      # Ego
-      ax_e = EGO_ACTION_DECEL[a_enum]
-      v_e_next = max(0.0, v_ego + ax_e * dt)
+#       # Ego
+#       ax_e = EGO_ACTION_DECEL[a_enum]
+#       v_e_next = max(0.0, v_ego + ax_e * dt)
 
-      v_rel = v_npc - v_ego
-      x_n_next = x_npc + v_rel * dt - 0.5 * ax_e * dt * dt
-      v_n_next = v_npc
+#       v_rel = v_npc - v_ego
+#       x_n_next = x_npc + v_rel * dt - 0.5 * ax_e * dt * dt
+#       v_n_next = v_npc
 
-      # --- map next continuous state back to discrete ---
-      sp = disc.values_to_state(x_n_next, v_e_next, v_n_next)
-      next_state[s, a_idx] = sp
-      state_prime = State(x_n_next, v_e_next, v_n_next)
+#       # --- map next continuous state back to discrete ---
+#       sp = disc.values_to_state(x_n_next, v_e_next, v_n_next)
+#       next_state[s, a_idx] = sp
+#       state_prime = State(x_n_next, v_e_next, v_n_next)
 
-      reward[s, a_idx] = rewards_model(current_state, a_enum, state_prime)
+#       reward[s, a_idx] = rewards_model(current_state, a_enum, state_prime)
 
-  return next_state, reward, terminal
+#   return next_state, reward, terminal
 
 
-def load_model(next_state_path, reward_path, terminal_path) -> DeterministicModel:
-  next_state = np.load(next_state_path)
-  reward = np.load(reward_path)
-  terminal = np.load(terminal_path)
-  S = next_state.shape[0]
-  A = next_state.shape[1]
+# def load_model(next_state_path, reward_path, terminal_path) -> DeterministicModel:
+#   next_state = np.load(next_state_path)
+#   reward = np.load(reward_path)
+#   terminal = np.load(terminal_path)
+#   S = next_state.shape[0]
+#   A = next_state.shape[1]
 
-  transition_matrices = []
-  rows = np.arange(S, dtype=np.int32)  # same for all actions
-  data = np.ones(S, dtype=np.float64)
+#   transition_matrices = []
+#   rows = np.arange(S, dtype=np.int32)  # same for all actions
+#   data = np.ones(S, dtype=np.float64)
 
-  for a in range(A):
-    cols = next_state[:, a]
-    P_a = csr_matrix((data, (rows, cols)), shape=(S, S))
-    transition_matrices.append(P_a)
+#   for a in range(A):
+#     cols = next_state[:, a]
+#     P_a = csr_matrix((data, (rows, cols)), shape=(S, S))
+#     transition_matrices.append(P_a)
 
-  return DeterministicModel(S, A, transition_matrices, reward, terminal)
+#   return DeterministicModel(S, A, transition_matrices, reward, terminal)
 
 
 def plot_reward_slice_gap_ve(

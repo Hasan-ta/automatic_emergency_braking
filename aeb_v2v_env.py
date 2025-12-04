@@ -102,9 +102,9 @@ class AEBV2VEnv(gym.Env):
         # Gym spaces
         self.action_space = spaces.Discrete(len(Action))
 
-        # Observations: [x_npc_in_ego, v_ego, v_npc]
-        obs_low = np.array([0.0,    0.0,    0.0], dtype=np.float64)
-        obs_high = np.array([150.0, 60.0, 60.0], dtype=np.float64)
+        # Observations: [x_npc_in_ego, v_ego, a_ego, v_npc]
+        obs_low = np.array([0.0,    0.0,  -10.0,  0.0], dtype=np.float64)
+        obs_high = np.array([150.0, 60.0, 0.0, 60.0], dtype=np.float64)
         self.observation_space = spaces.Box(low=obs_low, high=obs_high, dtype=np.float64)
 
         # Internal time and done flag
@@ -115,6 +115,7 @@ class AEBV2VEnv(gym.Env):
         self._x_s = 0.0  # ego center x
         self._x_l = 0.0  # lead center x
         self._v_s = 0.0  # ego vx
+        self._a_s = 0.0  # ego ax
         self._v_l = 0.0  # lead vx
 
     # ----- Gym API -----
@@ -152,8 +153,6 @@ class AEBV2VEnv(gym.Env):
             raise RuntimeError("step() called on terminated environment. Call reset().")
         
         obs_prev = self._get_obs()
-        
-        # print(action_enum)
 
         # Integrate one step
         self.ego.update(action_enum, self.dt)
@@ -174,12 +173,8 @@ class AEBV2VEnv(gym.Env):
 
         self._terminated = terminated or truncated
 
-        # Reward shaping: simple example
-        #   - small step penalty (-dt)
-        #   - big penalty on collision
-        #   - light penalty for strong braking to encourage minimal intervention
         obs = self._get_obs()
-        step_reward = self.rewards_model(State(obs_prev[0], obs_prev[1], obs_prev[2]), action, State(obs[0], obs[1], obs[2]))
+        step_reward = self.rewards_model(State(obs_prev[0], obs_prev[1], obs_prev[2], obs_prev[3]), action, State(obs[0], obs[1], obs[2], obs[3]))
 
         info = self._get_info(collided=collided)
 
@@ -200,9 +195,10 @@ class AEBV2VEnv(gym.Env):
         gap = lead_rear - ego_front
 
         v_ego = self.ego.vehicle_state.velocity.x
+        a_ego = self.ego.vehicle_state.acceleration.x
         v_npc = self.npc.vehicle_state.velocity.x
 
-        obs = np.array([gap, v_ego, v_npc], dtype=np.float64)
+        obs = np.array([gap, v_ego, a_ego, v_npc], dtype=np.float64)
         return obs
 
 
@@ -212,6 +208,7 @@ class AEBV2VEnv(gym.Env):
         self._x_s = self.ego.vehicle_state.box.center.x
         self._x_l = self.npc.vehicle_state.box.center.x
         self._v_s = self.ego.vehicle_state.velocity.x
+        self._a_s = self.ego.vehicle_state.acceleration.x
         self._v_l = self.npc.vehicle_state.velocity.x
 
     def _get_info(self, collided: bool) -> dict:

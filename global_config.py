@@ -6,9 +6,12 @@ class DiscretizerConfig:
   gap_max: float = 100.0
   v_min:float = 0.0
   v_max:float = 20.0
-  n_gap: int = 100
-  n_v_ego: int = 41
-  n_v_npc: int = 41
+  a_min:float = -9.0
+  a_max:float = 0.0
+  n_gap: int = 50
+  n_v_ego: int = 21
+  n_a_ego: int = 10
+  n_v_npc: int = 21
 
 
 @dataclass
