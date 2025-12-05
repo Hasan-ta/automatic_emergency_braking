@@ -8,7 +8,7 @@ from global_config import DiscretizerConfig, SimulationConfig
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Patch
-from q_learning import DQNInference
+# from q_learning import DQNInference
 
 @dataclass
 class PlannerConfig:
@@ -191,12 +191,14 @@ if __name__ == "__main__":
 
   model_cfg = DeterministicModelConfig()
 
-  model = build_stochastic_model_sparse(disc, sim_config.dt, model_cfg)
-  model.save()
+  # model = build_stochastic_model_sparse(disc, sim_config.dt, model_cfg)
+  # model.save()
   model = StochasticModelSparse.load(disc.num_states(), 4)
-  # model.reward = build_rewards_model(disc, dt=sim_config.dt, config=model_cfg)
+  model.reward = build_rewards_model(disc, dt=sim_config.dt, config=model_cfg)
     
+  plot_reward_slice_gap_ve(disc, model.reward, 0, 0.0, 1.0)
   plot_reward_slice_gap_ve(disc, model.reward, 2, 0.0, 1.0)
+  plot_reward_slice_gap_ve(disc, model.reward, 3, 0.0, 1.0)
 
   plan_cfg = PlannerConfig(gamma=0.96, tol=1e-8, max_iter=10_000)
   planner = ValueIterationPlanner(model, plan_cfg)
@@ -205,11 +207,11 @@ if __name__ == "__main__":
   # executor = DQNInference("aeb_dqn_qnet.pt")
   # policy = executor.get_policy(disc)
   plot_greedy_actions_gap_ve(policy, disc, 0.0, 0.0)
-  plot_greedy_actions_gap_ve(policy, disc, 4.0, 0.0)
+  plot_greedy_actions_gap_ve(policy, disc, 5.6, 0.0)
   plot_greedy_actions_gap_ve(policy, disc, 8.0, 0.0)
   plot_greedy_actions_gap_ve(policy, disc, 12.0, 0.0)
   plot_greedy_actions_gap_ve(policy, disc, 16.0, 0.0)
-  # planner.save_plan("q_deterministic_planner.npy")
+  planner.save_plan("q_deterministic_planner.npy")
   # plot_U_slice_gap_ve(disc, planner.U, 4.0, 1.0)
 
   # Evaluate the learned policy without exploration

@@ -34,11 +34,10 @@ class EgoAgent:
 
         assert isinstance(action, Action)
 
+        self.vehicle_state.update(dt)
         # Set longitudinal acceleration from action
         ax = self.action_to_decel.get(action, 0.0)
         self.vehicle_state.acceleration.x = ax
-
-        self.vehicle_state.update(dt)
 
 
 class NPCVehicle:

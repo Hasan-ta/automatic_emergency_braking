@@ -382,9 +382,13 @@ def main():
     def get_headway(speed):
         return speed * 0.277778 * 6.0
     
-    sc= Scenario(family=Family.V2V_DECELERATING, subject_speed_kmh=80, lead_speed_kmh=80, lead_decel_ms2=4.903325, headway_m=40, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.5')
+    sc = Scenario(family=Family.V2V_DECELERATING, subject_speed_kmh=80, lead_speed_kmh=80, lead_decel_ms2=2.941995, headway_m=12, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.5')
     sim_config = SimulationConfig()
     env = make_env(sc, RewardsModel(DeterministicModelConfig()), dt=sim_config.dt, max_time=sim_config.total_time)  # your custom env
+    # Per-dimension noise std for [gap, v_ego, a_ego, v_npc]
+    sigma = np.array([0.5, 0.3, 0.5, 0.3], dtype=np.float32)
+
+    env = NoisyObsWrapper(base_env, sigma=sigma, clip=True, seed=123)
 
     disc_config = DiscretizerConfig()
     disc = GapEgoAccelDiscretizer.from_ranges(
