@@ -7,7 +7,7 @@ from deterministic_model import RewardsModel
 
 def generate_training_scenarios():
   def get_headway(speed):
-    return speed * 0.277778 * 6.0
+    return speed * 0.277778 * 10.0
   
   scenarios = [
     Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=10, lead_speed_kmh=0.0, lead_decel_ms2=0.0, headway_m=get_headway(10.0), pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'),

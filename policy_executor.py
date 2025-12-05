@@ -1,6 +1,7 @@
 import numpy as np
 from discretizer import Discretizer
 from scenario_definitions import Action
+from deterministic_model import State, compute_ttc, DeterministicModelConfig
 
 class PolicyExecutor:
   def __init__(self, disc: Discretizer, q_path: str) -> None:
@@ -12,7 +13,11 @@ class PolicyExecutor:
     # )
 
     self.disc = disc
+    self.model_config = DeterministicModelConfig()
 
   def __call__(self, obs) -> Action:
+    ttc = compute_ttc(State(obs[0], obs[1], obs[2], obs[3]), self.model_config)
+    if(ttc > 4.0):
+        return Action.Nothing
     s = self.disc.obs_to_state(obs)
     return Action(int(np.argmax(self.Q[s])))

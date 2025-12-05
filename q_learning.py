@@ -115,11 +115,12 @@ class ReplayBuffer:
 
 def normalize_obs(obs: np.ndarray) -> np.ndarray:
     """Simple fixed scaling for [gap, v_ego, v_npc]."""
-    gap, v_e, v_n = obs
+    gap, v_e, a_e, v_n = obs
     # Example scales – tune to your scenario:
     gap_scale = 100.0    # m
     v_scale   = 60.0     # m/s (~216 km/h)
-    return np.array([gap / gap_scale, v_e / v_scale, v_n / v_scale], dtype=np.float32)
+    a_scale = 10.0
+    return np.array([gap / gap_scale, v_e / v_scale, a_e/a_scale, v_n / v_scale], dtype=np.float32)
 
 
 def select_action(q_net, obs, eps: float, act_dim: int, device):
@@ -248,15 +249,15 @@ if __name__ == "__main__":
 
 class DQNInference:
     def __init__(self, weights_path: str) -> None:
-        self.q_net_loaded = QNetwork(obs_dim=3, act_dim=4)   # same architecture!
+        self.q_net_loaded = QNetwork(obs_dim=4, act_dim=4)   # same architecture!
         self.q_net_loaded.load_state_dict(torch.load(weights_path))
         self.q_net_loaded.eval()  # set to eval mode for inference
         self.model_config = DeterministicModelConfig()
 
     def __call__(self, obs) -> Action:
-        # ttc = compute_ttc(State(obs[0], obs[1], obs[2]), self.model_config)
-        # if(ttc > 6.0):
-        #     return Action.Nothing
+        ttc = compute_ttc(State(obs[0], obs[1], obs[2], obs[3]), self.model_config)
+        if(ttc > 4.0):
+            return Action.Nothing
         
         obs_n = normalize_obs(obs)
         with torch.no_grad():

@@ -13,7 +13,7 @@ class DeterministicModelConfig:
   vehicle_length: float = 5.0
   vehicle_width: float = 2.0
   step_penalty: float = -0.1
-  collision_penalty: float = -6000.0
+  collision_penalty: float = -2000.0
   soft_brake_penalty: float = -10.0
   strong_brake_penalty: float = -20.0
   stop_gap_penalty_multiplier: float = 5.0
@@ -84,9 +84,6 @@ def terminal_state(state: State, config: DeterministicModelConfig) -> bool:
   
   return False
 
-import numpy as np
-
-import numpy as np
 
 def _sample_from_cell_4d(disc, s: int, n_samples: int) -> np.ndarray:
   """
@@ -133,21 +130,18 @@ class RewardsModel:
     r = self.config.step_penalty  # time penalty per step
     
     if _collided(next_state, self.config):
-      r += self.config.collision_penalty
+      r = self.config.collision_penalty
       return r
-
-    acc_diff = abs(state.a_ego - next_state.a_ego)
-    r -= acc_diff*2
 
     ttc = compute_ttc(state, self.config)
-    if (ttc > 6.0) and (action == Action.SoftBrake or action == Action.StrongBrake):
-      r += -2000
+    if (ttc > 4.0) and (action == Action.SoftBrake or action == Action.StrongBrake):
+      r = -200.0
       return r
     
-    if action == Action.SoftBrake:
-      r += self.config.soft_brake_penalty * ttc
-    elif action == Action.StrongBrake:
-      r += self.config.strong_brake_penalty * ttc
+    acc_diff = abs(next_state.a_ego - state.a_ego)
+    ttc_capped = min(10.0, ttc)
+    r -= acc_diff * 0.5*(ttc_capped + 1.0)
+
 
     return r
   
