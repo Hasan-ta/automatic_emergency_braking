@@ -134,7 +134,7 @@ class RewardsModel:
       return r
 
     ttc = compute_ttc(state, self.config)
-    if (ttc > 4.0) and (action == Action.SoftBrake or action == Action.StrongBrake):
+    if (ttc > 6.0) and (action == Action.SoftBrake or action == Action.StrongBrake):
       r = -200.0
       return r
     

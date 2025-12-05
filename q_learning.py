@@ -11,12 +11,16 @@ from scenario_definitions import Family, Scenario, Action
 from global_config import SimulationConfig
 from aeb_v2v_env import AEBV2VEnv
 from discretizer import Discretizer
+from kalman_filter import GapEgoAccelKF
+from noisy_obs_wrapper import NoisyObsWrapper
 
 import random
 import gymnasium as gym
 import numpy as np
 
 import signal
+
+torch.set_default_dtype(torch.float64)
 
 terminate_signal = False
 def signal_handler(sig, frame):
@@ -120,14 +124,14 @@ def normalize_obs(obs: np.ndarray) -> np.ndarray:
     gap_scale = 100.0    # m
     v_scale   = 60.0     # m/s (~216 km/h)
     a_scale = 10.0
-    return np.array([gap / gap_scale, v_e / v_scale, a_e/a_scale, v_n / v_scale], dtype=np.float32)
+    return np.array([gap / gap_scale, v_e / v_scale, a_e/a_scale, v_n / v_scale], dtype=np.float64)
 
 
 def select_action(q_net, obs, eps: float, act_dim: int, device):
     if random.random() < eps:
         return random.randrange(act_dim)
     with torch.no_grad():
-        obs_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+        obs_t = torch.tensor(obs, dtype=torch.float64, device=device).unsqueeze(0)
         q_vals = q_net(obs_t)
         return int(q_vals.argmax(dim=1).item())
 
@@ -144,7 +148,8 @@ def train_dqn(
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    obs_dim = env.observation_space.shape[0]  # 3
+    # obs_dim = env.observation_space.shape[0]  # 3
+    obs_dim = 8
     act_dim = env.action_space.n              # 4
 
     q_net = QNetwork(obs_dim, act_dim).to(device)
@@ -167,22 +172,31 @@ def train_dqn(
         global terminate_signal
         if terminate_signal:
             break
-        obs, info = env.reset()
-        obs = normalize_obs(obs)
+        obs_noisy, info = env.reset()
+        # obs = normalize_obs(obs)
         done = False
         ep_reward = 0.0
 
+        # KF init
+        kf = GapEgoAccelKF(dt=0.1)
+        kf.reset(obs_noisy[:3])
+        b = kf.belief_features(include_var=True)
+
+
         while not done:
             eps = linear_epsilon(global_step)
-            a = select_action(q_net, obs, eps, act_dim, device)
+            a = select_action(q_net, b, eps, act_dim, device)
 
             next_obs, r, terminated, truncated, info = env.step(a)
             # print(f"r: {r}, a: {a}, gap: {info["gap_m"]}")
             done = terminated or truncated
-            next_obs_norm = normalize_obs(next_obs)
+            kf.predict(0.0)
+            kf.update(next_obs[:3])
 
-            replay.push(obs, a, r, next_obs_norm, done)
-            obs = next_obs_norm
+            b_next = kf.belief_features(include_var=True)
+
+            replay.push(b, a, r, b_next, done)
+            b = b_next
             ep_reward += r
             global_step += 1
 
@@ -190,11 +204,11 @@ def train_dqn(
             if len(replay) >= batch_size:
                 s, a_b, r_b, s2, d_b = replay.sample(batch_size)
 
-                s_t  = torch.tensor(s, dtype=torch.float32, device=device)
+                s_t  = torch.tensor(s, dtype=torch.float64, device=device)
                 a_t  = torch.tensor(a_b, dtype=torch.int64, device=device).unsqueeze(1)
-                r_t  = torch.tensor(r_b, dtype=torch.float32, device=device).unsqueeze(1)
-                s2_t = torch.tensor(s2, dtype=torch.float32, device=device)
-                d_t  = torch.tensor(d_b, dtype=torch.float32, device=device).unsqueeze(1)
+                r_t  = torch.tensor(r_b, dtype=torch.float64, device=device).unsqueeze(1)
+                s2_t = torch.tensor(s2, dtype=torch.float64, device=device)
+                d_t  = torch.tensor(d_b, dtype=torch.float64, device=device).unsqueeze(1)
 
                 # Q(s,a)
                 q_vals = q_net(s_t).gather(1, a_t)  # (B,1)
@@ -208,6 +222,7 @@ def train_dqn(
 
                 optimizer.zero_grad()
                 loss.backward()
+                nn.utils.clip_grad_norm_(q_net.parameters(), max_norm=10.0)
                 optimizer.step()
 
             # target network update
@@ -223,18 +238,6 @@ def train_dqn(
 
 if __name__ == "__main__":
   signal.signal(signal.SIGINT, signal_handler)
-  # def get_headway(speed):
-  #   return speed * 0.277778 * 6.0
-  # scenarios = [
-  #   # Scenario(family=Family.V2V_SLOWER_MOVING, subject_speed_kmh=60, lead_speed_kmh=20, lead_decel_ms2=0.0, headway_m=get_headway(40.0), pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'),
-  #   Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=10, lead_speed_kmh=0.0, lead_decel_ms2=0.0, headway_m=get_headway(10.0), pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'),
-  #   Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=20, lead_speed_kmh=0.0, lead_decel_ms2=0.0, headway_m=get_headway(20.0), pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'),
-  #   Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=30, lead_speed_kmh=0.0, lead_decel_ms2=0.0, headway_m=get_headway(30.0), pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'),  
-  #   Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=40, lead_speed_kmh=0.0, lead_decel_ms2=0.0, headway_m=get_headway(40.0), pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'),  
-  #   Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=50, lead_speed_kmh=0.0, lead_decel_ms2=0.0, headway_m=get_headway(50.0), pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'),  
-  #   Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=60, lead_speed_kmh=0.0, lead_decel_ms2=0.0, headway_m=get_headway(60.0), pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'),  
-  #   Scenario(family=Family.V2V_STATIONARY, subject_speed_kmh=70, lead_speed_kmh=0.0, lead_decel_ms2=0.0, headway_m=get_headway(70.0), pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.3 no manual'),
-  # ]
 
   scenarios = generate_training_scenarios()
   model_config = DeterministicModelConfig()
@@ -242,26 +245,41 @@ if __name__ == "__main__":
   sim_config = SimulationConfig()
   # env = make_env(sc, rewards_model, dt=sim_config.dt)
   multi_env = MultiScenarioAEBEnv(scenarios, rewards_model, dt=sim_config.dt, max_time=sim_config.total_time)
-  q_net, target_net, returns = train_dqn(multi_env, batch_size=128, num_episodes=25000, eps_decay_steps=200_000)
+
+  # Optional: add observation noise to [gap, v_ego, a_ego]
+  sigma = np.array([0.5, 0.2, 0.0, 0.0], dtype=np.float64)
+  env = NoisyObsWrapper(multi_env, sigma=sigma, clip=True, seed=123)
+  q_net, target_net, returns = train_dqn(env, batch_size=128, num_episodes=25000, eps_decay_steps=200_000)
   # q_net, target_net, returns = train_dqn(env, num_episodes=10000)
-  torch.save(q_net.state_dict(), "aeb_dqn_qnet.pt")
+  torch.save(q_net.state_dict(), "belief_aeb_dqn_qnet.pt")
 
 
 class DQNInference:
     def __init__(self, weights_path: str) -> None:
-        self.q_net_loaded = QNetwork(obs_dim=4, act_dim=4)   # same architecture!
+        self.q_net_loaded = QNetwork(obs_dim=8, act_dim=4)   # same architecture!
         self.q_net_loaded.load_state_dict(torch.load(weights_path))
         self.q_net_loaded.eval()  # set to eval mode for inference
         self.model_config = DeterministicModelConfig()
+        self.kf = GapEgoAccelKF(dt=0.1)
+        self.kf_initialized = False
 
     def __call__(self, obs) -> Action:
-        ttc = compute_ttc(State(obs[0], obs[1], obs[2], obs[3]), self.model_config)
-        if(ttc > 4.0):
+        if not self.kf_initialized:
+            self.kf.reset(obs[:3])
+            self.kf_initialized = True
             return Action.Nothing
         
-        obs_n = normalize_obs(obs)
+        self.kf.predict(0.0)
+        self.kf.update(obs[:3])
+
+        mu = self.kf.mu
+
+        ttc = compute_ttc(State(mu[0], mu[1], mu[2], mu[3]), self.model_config)
+        if(ttc > 8.0):
+            return Action.Nothing
+        
         with torch.no_grad():
-            x = torch.tensor(obs_n, dtype=torch.float32).unsqueeze(0)
+            x = torch.tensor(self.kf.belief_features(), dtype=torch.float64).unsqueeze(0)
             q = self.q_net_loaded(x)
             return Action(int(q.argmax(dim=1).item()))
         

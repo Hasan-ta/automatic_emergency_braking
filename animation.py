@@ -11,6 +11,8 @@ from discretizer import Discretizer, GapEgoAccelDiscretizer
 from deterministic_model import RewardsModel, DeterministicModelConfig
 from global_config import DiscretizerConfig, SimulationConfig
 from q_learning import DQNInference
+from noisy_obs_wrapper import NoisyObsWrapper
+from kalman_filter import GapEgoAccelKF
 
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
@@ -47,6 +49,7 @@ class AEBArcadeViewer(arcade.Window):
         self.tt = 0.0
         self._collided = False
         self._accumulated_reward = 0.0
+        self.filter = GapEgoAccelKF(0.1)
 
         # --- histories for plotting ---
         self.max_history = max_history
@@ -97,6 +100,7 @@ class AEBArcadeViewer(arcade.Window):
         self._sim_time_accum = 0.0
         self._collided = False
         self._accumulated_reward = 0.0
+        self.filter.reset(self.obs[:3])
 
     # ---- stepping logic ----
     def _step_env_once(self):
@@ -110,14 +114,19 @@ class AEBArcadeViewer(arcade.Window):
         self.obs, r, done, trunc, info = self.env.step(a)
         self._accumulated_reward += r
         base = self.env.unwrapped
+        self.filter.predict(0.0)
+        self.filter.update(self.obs[:3])
 
         self.done = bool(done or trunc)
         self.tt = info.get("time_s", self.tt + self.env_dt)
         self._collided = info["collided"]
 
+        mu = self.filter.mu
         # speeds
-        v_ego = getattr(base, "_v_s", np.nan)   # adjust names
-        v_lead = getattr(base, "_v_l", np.nan)
+        # v_ego = getattr(base, "_v_s", np.nan)   # adjust names
+        # v_lead = getattr(base, "_v_l", np.nan)
+        v_ego = mu[1, 0]
+        v_lead = mu[3, 0]
 
         # histories
         self.times.append(self.tt)
@@ -126,9 +135,11 @@ class AEBArcadeViewer(arcade.Window):
         self.action_hist.append(a)
         base = self.env.unwrapped
         x_ego_m = getattr(base, "_x_s", 0.0)
-        x_lead_m = getattr(base, "_x_l", 30.0)
-        actor2 = Actor(x_ego_m, getattr(base, "_v_s"), length=5.0, width=2.0)
-        actor1 = Actor(x_lead_m, getattr(base, "_v_l"), length=5.0, width=2.0)
+        # x_lead_m = getattr(base, "_x_l", 30.0)
+        # x_lead_m = self.obs[0] + x_ego_m
+        x_lead_m = mu[0, 0] + x_ego_m
+        actor2 = Actor(x_ego_m, v_ego, length=5.0, width=2.0)
+        actor1 = Actor(x_lead_m, v_lead, length=5.0, width=2.0)
         self.ttc_hist.append(compute_ttc(actor1, actor2))
 
         # trim
@@ -165,11 +176,17 @@ class AEBArcadeViewer(arcade.Window):
         )
 
         base = self.env.unwrapped
+        mu = self.filter.mu
         x_ego_m = getattr(base, "_x_s", 0.0)
-        x_lead_m = getattr(base, "_x_l", 30.0)
+        # x_lead_m = getattr(base, "_x_l", 30.0)
+        # x_lead_m = self.obs[0] + x_ego_m
+        x_lead_m = mu[0, 0] + x_ego_m
 
-        actor2 = Actor(x_ego_m, getattr(base, "_v_s"), length=5.0, width=2.0)
-        actor1 = Actor(x_lead_m, getattr(base, "_v_l"), length=5.0, width=2.0)
+        v_ego = mu[1, 0]
+        v_lead = mu[3, 0]
+
+        actor2 = Actor(x_ego_m, v_ego, length=5.0, width=2.0)
+        actor1 = Actor(x_lead_m, v_lead, length=5.0, width=2.0)
         gap = compute_gap(actor1, actor2)
         ttc = compute_ttc(actor1, actor2)
 
@@ -196,6 +213,7 @@ class AEBArcadeViewer(arcade.Window):
         v_lead = self.v_lead_hist[-1] if self.v_lead_hist else 0.0
 
         speed_label = "paused" if self.sim_speed == 0.0 else f"{self.sim_speed:.2f}x"
+
         info_text = (
             f"t = {self.tt:.2f}s   gap = {gap:.1f}m   "
             f"v_ego = {v_ego:.1f} m/s   v_lead = {v_lead:.1f} m/s   "
@@ -382,13 +400,13 @@ def main():
     def get_headway(speed):
         return speed * 0.277778 * 6.0
     
-    sc = Scenario(family=Family.V2V_DECELERATING, subject_speed_kmh=80, lead_speed_kmh=80, lead_decel_ms2=2.941995, headway_m=12, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.5')
+    sc = Scenario(family=Family.V2V_DECELERATING, subject_speed_kmh=80, lead_speed_kmh=80, lead_decel_ms2=3.92266, headway_m=20, pedestrian_speed_kmh=None, overlap=None, daylight=True, manual_brake=False, note='S7.5')
     sim_config = SimulationConfig()
     env = make_env(sc, RewardsModel(DeterministicModelConfig()), dt=sim_config.dt, max_time=sim_config.total_time)  # your custom env
-    # Per-dimension noise std for [gap, v_ego, a_ego, v_npc]
-    sigma = np.array([0.5, 0.3, 0.5, 0.3], dtype=np.float32)
 
-    env = NoisyObsWrapper(base_env, sigma=sigma, clip=True, seed=123)
+    # Per-dimension noise std for [gap, v_ego, a_ego, v_npc]
+    sigma = np.array([0.5, 0.2, 0.0, 0.0], dtype=np.float64)
+    env = NoisyObsWrapper(env, sigma=sigma, clip=True, seed=123)
 
     disc_config = DiscretizerConfig()
     disc = GapEgoAccelDiscretizer.from_ranges(
@@ -403,8 +421,9 @@ def main():
         n_a_ego=disc_config.n_a_ego,
         n_v_npc=disc_config.n_v_npc,
     ) 
-    executor = PolicyExecutor(disc, '/Users/htafish/projects/aa228/final_project/q_deterministic_planner.npy')
+    # executor = PolicyExecutor(disc, '/Users/htafish/projects/aa228/final_project/q_deterministic_planner.npy')
     # executor = DQNInference("aeb_dqn_qnet.pt")
+    executor = DQNInference("belief_aeb_dqn_qnet.pt")
     window = AEBArcadeViewer(env, policy=executor, scale_m_to_px=8.0)
     arcade.run()
 

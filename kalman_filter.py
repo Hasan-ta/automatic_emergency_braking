@@ -7,8 +7,8 @@ class GapEgoAccelKF:
     def __init__(
         self,
         dt: float,
-        q_diag=(0.5, 0.5, 1.0, 0.5),   # process noise stds
-        r_diag=(0.5, 0.5, 0.5, 0.5),   # observation noise stds
+        q_diag=(0.5, 0.5, 1.0, 1.0),   # process noise stds
+        r_diag=(0.5, 0.5, 0.5),   # observation noise stds
     ):
         self.dt = float(dt)
         self.n = 4
@@ -21,10 +21,11 @@ class GapEgoAccelKF:
         self.Q = np.diag(q**2)
         self.R = np.diag(r**2)
 
-        self.H = np.eye(4, dtype=np.float64)
+        self.H = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
 
     def reset(self, init_obs):
-        self.mu = np.asarray(init_obs, dtype=np.float64).reshape(4, 1)
+        self.mu[:3] = np.asarray(init_obs, dtype=np.float64).reshape(3, 1)
+        self.mu[-1, 0] = 0.0
         self.Sigma = np.eye(4, dtype=np.float64)
 
     def _F_and_u(self, a_npc: float):
@@ -54,7 +55,7 @@ class GapEgoAccelKF:
         self.Sigma = F @ self.Sigma @ F.T + self.Q
 
     def update(self, obs):
-        z = np.asarray(obs, dtype=np.float64).reshape(4, 1)
+        z = np.asarray(obs, dtype=np.float64).reshape(3, 1)
 
         S = self.H @ self.Sigma @ self.H.T + self.R
         K = self.Sigma @ self.H.T @ np.linalg.inv(S)
