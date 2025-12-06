@@ -95,6 +95,8 @@ class QNetwork(nn.Module):
             nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
             nn.Linear(64, act_dim),
         )
 
@@ -249,7 +251,7 @@ if __name__ == "__main__":
   # Optional: add observation noise to [gap, v_ego, a_ego]
   sigma = np.array([0.5, 0.2, 0.0, 0.0], dtype=np.float64)
   env = NoisyObsWrapper(multi_env, sigma=sigma, clip=True, seed=123)
-  q_net, target_net, returns = train_dqn(env, batch_size=128, num_episodes=25000, eps_decay_steps=200_000)
+  q_net, target_net, returns = train_dqn(env, batch_size=128, num_episodes=40000, eps_decay_steps=300_000)
   # q_net, target_net, returns = train_dqn(env, num_episodes=10000)
   torch.save(q_net.state_dict(), "belief_aeb_dqn_qnet.pt")
 

@@ -1,6 +1,6 @@
 import numpy as np
 from discretizer import Discretizer
-from scenario_definitions import Action
+from scenario_definitions import Action, Actor
 from deterministic_model import State, compute_ttc, DeterministicModelConfig
 from kalman_filter import GapEgoAccelKF
 
@@ -18,6 +18,8 @@ class PolicyExecutor:
     self.model_config = DeterministicModelConfig()
     self.kf = GapEgoAccelKF(dt=0.1)
     self.kf_initialized = False
+    self.obs = []
+    self.est = []
 
   def gaussian_belief_over_states(self, mu: np.ndarray,
                                 Sigma: np.ndarray,
@@ -80,6 +82,7 @@ class PolicyExecutor:
         return int(np.argmax(Q_b))
 
   def __call__(self, obs) -> Action:
+    self.obs.append(obs)
     if not self.kf_initialized:
       self.kf.reset(obs[:3])
       self.kf_initialized = True
@@ -89,11 +92,53 @@ class PolicyExecutor:
     self.kf.update(obs[:3])
 
     mu = self.kf.mu
+    self.est.append(mu)
 
-    ttc = compute_ttc(State(mu[0], mu[1], mu[2], mu[3]), self.model_config)
-    if(ttc > 6.0):
-        return Action.Nothing
+    # ttc = compute_ttc(State(mu[0], mu[1], mu[2], mu[3]), self.model_config)
+    # if(ttc > 4.0):
+    #     return Action.Nothing
     # s = self.disc.obs_to_state(obs)
     # return Action(int(np.argmax(self.Q[s])))
 
     return Action(self.qmdp_action(self.kf.mu, self.kf.Sigma, self.disc))
+  
+
+class NaivePolicyExecutor:
+  def __init__(self) -> None:
+    self.kf = GapEgoAccelKF(dt=0.1)
+    self.kf_initialized = False
+    self.model_config = DeterministicModelConfig()
+    self.obs = []
+    self.est = []
+    self.v_std = []
+
+  def ttc_policy(self, ttc):
+    if ttc < 2.0:
+        return Action.StrongBrake
+    elif ttc < 4.0:
+        return Action.SoftBrake
+    else:
+        return Action.Nothing
+
+  def __call__(self, obs) -> Action:
+    self.obs.append(obs)
+    if not self.kf_initialized:
+      self.kf.reset(obs[:3])
+      self.kf_initialized = True
+      self.est.append(self.kf.mu)
+      self.v_std.append(np.sqrt(self.kf.Sigma[1, 1] + self.kf.Sigma[3, 3]))
+      print(np.sqrt(self.kf.Sigma[3, 3]))
+      return Action.Nothing
+    
+    self.kf.predict(0.0)
+    self.kf.update(obs[:3])
+
+    mu = self.kf.mu
+    self.est.append(mu)
+    self.v_std.append(np.sqrt(self.kf.Sigma[1, 1] + self.kf.Sigma[3, 3]))
+    print(np.sqrt(self.kf.Sigma[3, 3]))
+
+    ttc = compute_ttc(State(mu[0], mu[1], mu[2], mu[3]), self.model_config)
+    # print(f"ttc from executor: {ttc}")
+
+    return self.ttc_policy(ttc)

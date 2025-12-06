@@ -157,25 +157,12 @@ def plot_greedy_actions_gap_ve(
 
 # =============== Small demo ===============
 if __name__ == "__main__":
-  # signal.signal(signal.SIGINT, signal_handler)
 
   scenarios = generate_training_scenarios()
 
   sim_config = SimulationConfig()
 
-  # Discretization grids (tune to your dynamics):
-  # Gap up to 60m, rel_speed -30..30 m/s, ego 0..40 m/s
   disc_config = DiscretizerConfig()
-  # disc = Discretizer.from_ranges(
-  #   gap_min=disc_config.gap_min,
-  #   gap_max=disc_config.gap_max,
-  #   v_min=disc_config.v_min,
-  #   v_max=disc_config.v_max,      # m/s
-  #   n_gap=disc_config.n_gap,
-  #   n_v_ego=disc_config.n_v_ego,
-  #   n_v_npc=disc_config.n_v_npc,
-  # ) 
-
   disc = GapEgoAccelDiscretizer.from_ranges(
     gap_min=disc_config.gap_min,
     gap_max=disc_config.gap_max,
