@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import List
 import matplotlib.pyplot as plt
 import math
+from metrics import compute_discomfort
 
 @dataclass
 class DeterministicModelConfig:
@@ -128,20 +129,21 @@ class RewardsModel:
 
     # --- reward shaping (like env.step) ---
     r = self.config.step_penalty  # time penalty per step
+
+    r -= 3.0 * compute_discomfort(action_int=action.value, a_ego=next_state.a_ego, a_ego_prev=state.a_ego, dt=0.1, w_warning=0.0)
     
     if _collided(next_state, self.config):
       r = self.config.collision_penalty
+      r -= 50 * abs(next_state.v_npc - next_state.v_ego)
       return r
 
     ttc = compute_ttc(state, self.config)
-    if (ttc > 6.0) and (action == Action.SoftBrake or action == Action.StrongBrake):
-      r = -200.0
-      return r
-    
-    acc_diff = abs(next_state.a_ego - state.a_ego)
-    ttc_capped = min(10.0, ttc)
-    r -= acc_diff * 0.5*(ttc_capped + 1.0)
-
+    if (ttc > 4.0):
+      ttc_clipped = min(ttc, 10.0)
+      if action == Action.SoftBrake:
+        r += ttc_clipped * self.config.soft_brake_penalty
+      if action == Action.StrongBrake:
+        r += ttc_clipped * self.config.strong_brake_penalty
 
     return r
   

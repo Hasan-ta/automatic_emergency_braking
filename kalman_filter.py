@@ -14,7 +14,7 @@ class GapEgoAccelKF:
         self.n = 4
 
         self.mu = np.zeros((4, 1), dtype=np.float64)
-        self.Sigma = np.eye(4, dtype=np.float64)
+        self.Sigma = np.eye(4, dtype=np.float64) * 2.0
 
         q = np.asarray(q_diag, dtype=np.float64)
         r = np.asarray(r_diag, dtype=np.float64)
